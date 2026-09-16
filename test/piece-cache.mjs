@@ -50,13 +50,19 @@ const torrent = client.add(magnet, {
 await new Promise((resolve) => torrent.once('ready', resolve));
 
 const [fileA, fileB] = torrent.files;
-const readerA = new TorrentFileSource(torrent, fileA, cache, { stallMs: 45_000 });
-const readerB = new TorrentFileSource(torrent, fileB, cache, { stallMs: 45_000 });
+const readerA = new TorrentFileSource(torrent, fileA, cache, {
+  stallMs: 45_000,
+});
+const readerB = new TorrentFileSource(torrent, fileB, cache, {
+  stallMs: 45_000,
+});
 
 /** Bytes currently cached for one file, from the pieces covering its range. */
 const cachedBytes = (file) => {
   const first = Math.floor(file.offset / torrent.pieceLength);
-  const last = Math.floor((file.offset + file.length - 1) / torrent.pieceLength);
+  const last = Math.floor(
+    (file.offset + file.length - 1) / torrent.pieceLength,
+  );
   let pieces = 0;
   for (let i = first; i <= last; i++) {
     if (torrent.bitfield.get(i)) {
@@ -75,7 +81,10 @@ const stream = async (reader, file) => {
 };
 
 const expectedHead = (await readFile(source)).subarray(0, HEAD_BYTES);
-check((await readRange(readerA, 0, HEAD_BYTES)).equals(expectedHead), 'reads return the file bytes');
+check(
+  (await readRange(readerA, 0, HEAD_BYTES)).equals(expectedHead),
+  'reads return the file bytes',
+);
 
 const slack = 2 * torrent.pieceLength;
 const streamedA = await stream(readerA, fileA);
@@ -106,7 +115,9 @@ check(
 
 const reread = await Promise.race([
   readRange(readerA, 0, HEAD_BYTES),
-  new Promise((_, reject) => setTimeout(() => reject(new Error('timed out')), 60_000)),
+  new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('timed out')), 60_000),
+  ),
 ]).catch((err) => err);
 check(
   Buffer.isBuffer(reread) && reread.equals(expectedHead),

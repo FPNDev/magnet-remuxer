@@ -1,6 +1,11 @@
 type Level = 'debug' | 'info' | 'warn' | 'error';
 
-const LEVELS: Record<Level, number> = { debug: 10, info: 20, warn: 30, error: 40 };
+const LEVELS: Record<Level, number> = {
+  debug: 10,
+  info: 20,
+  warn: 30,
+  error: 40,
+};
 const threshold = LEVELS[process.env.LOG_LEVEL as Level] ?? LEVELS.info;
 
 type Fields = Record<string, unknown>;

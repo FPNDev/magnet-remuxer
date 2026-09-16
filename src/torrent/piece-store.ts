@@ -45,7 +45,10 @@ export class PieceCache {
    * Value for WebTorrent's `store` torrent option. WebTorrent invokes it with
    * `new`, so it must be a plain function rather than an arrow function.
    */
-  readonly createStore: (chunkLength: number, opts: StoreOptions) => SlidingPieceStore;
+  readonly createStore: (
+    chunkLength: number,
+    opts: StoreOptions,
+  ) => SlidingPieceStore;
 
   constructor(
     readonly directory: string,
@@ -53,9 +56,17 @@ export class PieceCache {
   ) {
     this.pieces = new SizeLru(budgetBytes);
 
+    // oxlint-disable-next-line no-this-alias
     const cache = this;
-    this.createStore = function createStore(chunkLength: number, opts: StoreOptions) {
-      const store = new SlidingPieceStore(cache, chunkLength, opts.torrent as TorrentInternals);
+    this.createStore = function createStore(
+      chunkLength: number,
+      opts: StoreOptions,
+    ) {
+      const store = new SlidingPieceStore(
+        cache,
+        chunkLength,
+        opts.torrent as TorrentInternals,
+      );
       cache.stores.set(store.infoHash, store);
       return store;
     };
@@ -225,7 +236,11 @@ export class SlidingPieceStore {
   }
 }
 
-async function readPiece(file: string, offset: number, length: number): Promise<Buffer> {
+async function readPiece(
+  file: string,
+  offset: number,
+  length: number,
+): Promise<Buffer> {
   const handle = await open(file, 'r');
   try {
     const buffer = Buffer.allocUnsafe(length);

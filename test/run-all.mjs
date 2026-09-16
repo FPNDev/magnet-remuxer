@@ -10,6 +10,7 @@ const suites = [
   ['remux.mjs', [path.join(fixturesDir, 'movie.mkv'), '6']],
   ['remux.mjs', [path.join(fixturesDir, 'tiny.mkv'), '2']],
   ['remux.mjs', [path.join(fixturesDir, 'sparse.mkv'), '4']],
+  ['remux.mjs', [path.join(fixturesDir, 'codecs.mkv'), '4']],
   ['piece-cache.mjs', []],
   ['e2e.mjs', []],
   ['multi.mjs', []],
@@ -24,7 +25,9 @@ for (const [script, args] of suites) {
   });
   if (code !== 0) {
     failed++;
-    console.log(`\n!! ${script} ${args.map((a) => path.basename(a)).join(' ')} exited with ${code}`);
+    console.log(
+      `\n!! ${script} ${args.map((a) => path.basename(a)).join(' ')} exited with ${code}`,
+    );
   }
 }
 

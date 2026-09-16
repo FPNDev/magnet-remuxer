@@ -12,9 +12,14 @@ export interface TaskContext {
   waitedMs: number;
 }
 
-interface Entry {
+export interface TaskSpec {
+  /** What the task produces; only one task per key runs at a time upstream. */
   key: string;
   priority: Priority;
+  group: string;
+}
+
+interface Entry extends TaskSpec {
   seq: number;
   queuedAt: number;
   start: () => void;
@@ -23,6 +28,7 @@ interface Entry {
 
 interface RunningTask {
   key: string;
+  group: string;
   priority: Priority;
   abort: AbortController;
 }
@@ -31,15 +37,21 @@ interface RunningTask {
  * Runs async tasks with a concurrency limit. Foreground work goes first, only a
  * third of the slots may hold background work, and a waiting foreground task
  * preempts a running background one: prefetching must never make a player wait.
+ * No group may hold more than `groupLimit` slots.
  */
 export class TaskQueue {
   private readonly waiting: Entry[] = [];
   private readonly running = new Set<RunningTask>();
   private readonly backgroundLimit: number;
+  private readonly groupLimit: number;
   private seq = 0;
 
-  constructor(private readonly concurrency: number) {
+  constructor(
+    private readonly concurrency: number,
+    groupLimit = concurrency,
+  ) {
     this.backgroundLimit = Math.max(1, Math.floor(concurrency / 3));
+    this.groupLimit = Math.max(1, Math.min(groupLimit, concurrency));
   }
 
   get stats() {
@@ -51,20 +63,19 @@ export class TaskQueue {
   }
 
   run<T>(
-    key: string,
-    priority: Priority,
+    spec: TaskSpec,
     task: (context: TaskContext) => Promise<T>,
   ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const entry: Entry = {
-        key,
-        priority,
+        ...spec,
         seq: this.seq++,
         queuedAt: Date.now(),
         cancel: reject,
         start: () => {
           const running: RunningTask = {
-            key,
+            key: entry.key,
+            group: entry.group,
             priority: entry.priority,
             abort: new AbortController(),
           };
@@ -89,11 +100,18 @@ export class TaskQueue {
     });
   }
 
-  /** Moves queued tasks with `key` to the foreground. */
+  /**
+   * Moves tasks with `key` to the foreground
+   */
   promote(key: string): void {
     for (const entry of this.waiting) {
       if (entry.key === key) {
         entry.priority = Priority.Foreground;
+      }
+    }
+    for (const task of this.running) {
+      if (task.key === key) {
+        task.priority = Priority.Foreground;
       }
     }
     this.drain();
@@ -124,22 +142,44 @@ export class TaskQueue {
 
   /** Aborts background tasks so waiting foreground work can start. */
   private preempt(): void {
-    let needed = 0;
     for (const entry of this.waiting) {
-      if (entry.priority === Priority.Foreground) {
-        needed++;
+      if (entry.priority !== Priority.Foreground) {
+        continue;
       }
-    }
+      // Either the pool is full or this task's own group is, and only a
+      // background task in that group frees the slot it is waiting for.
+      const sameGroup = this.groupRunning(entry.group) >= this.groupLimit;
+      if (!sameGroup && this.running.size < this.concurrency) {
+        continue;
+      }
 
-    for (const task of this.running) {
-      if (needed === 0) {
-        break;
-      }
-      if (task.priority === Priority.Background && !task.abort.signal.aborted) {
-        task.abort.abort(new CancelledError(`Preempted ${task.key}`));
-        needed--;
+      const victim = this.pickVictim(sameGroup ? entry.group : undefined);
+      if (victim) {
+        victim.abort.abort(new CancelledError(`Preempted ${victim.key}`));
       }
     }
+  }
+
+  private pickVictim(group: string | undefined): RunningTask | undefined {
+    for (const task of this.running) {
+      if (task.priority !== Priority.Background || task.abort.signal.aborted) {
+        continue;
+      }
+      if (group === undefined || task.group === group) {
+        return task;
+      }
+    }
+    return undefined;
+  }
+
+  private groupRunning(group: string): number {
+    let count = 0;
+    for (const task of this.running) {
+      if (task.group === group) {
+        count++;
+      }
+    }
+    return count;
   }
 
   private backgroundRunning(): number {
@@ -154,10 +194,19 @@ export class TaskQueue {
 
   private pickNext(): Entry | undefined {
     const backgroundAllowed = this.backgroundRunning() < this.backgroundLimit;
+    const groupUse = new Map<string, number>();
     let best: Entry | undefined;
 
     for (const entry of this.waiting) {
       if (entry.priority === Priority.Background && !backgroundAllowed) {
+        continue;
+      }
+      let used = groupUse.get(entry.group);
+      if (used === undefined) {
+        used = this.groupRunning(entry.group);
+        groupUse.set(entry.group, used);
+      }
+      if (used >= this.groupLimit) {
         continue;
       }
       if (

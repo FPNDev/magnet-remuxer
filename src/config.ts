@@ -20,7 +20,9 @@ function number(name: string, fallback: number): number {
 export const config = {
   port: number('PORT', 3000),
   ffmpegPath: env.FFMPEG_PATH || 'ffmpeg',
-  cacheDir: path.resolve(env.CACHE_DIR || path.join(os.tmpdir(), 'magnet-cache')),
+  cacheDir: path.resolve(
+    env.CACHE_DIR || path.join(os.tmpdir(), 'magnet-cache'),
+  ),
 
   /**
    * Disk budget for all cached torrent pieces, shared by every torrent.
@@ -40,9 +42,20 @@ export const config = {
   prefetchAheadBytes: number('PREFETCH_AHEAD_MB', 96) * MiB,
   /** A request waiting longer than this for its segment fails instead of hanging. */
   requestTimeoutMs: number('REQUEST_TIMEOUT_S', 120) * 1000,
-  maxConcurrentJobs: number('MAX_CONCURRENT_JOBS', Math.max(16, os.availableParallelism())),
+  maxConcurrentJobs: number(
+    'MAX_CONCURRENT_JOBS',
+    Math.max(16, os.availableParallelism()),
+  ),
+  /**
+   * Concurrent jobs reading one torrent. Its peers deliver a fixed number of
+   * bytes per second however many reads are open, and WebTorrent serves a read
+   * one whole piece at a time, so extra readers never make a torrent faster -
+   * they just divide it. Smaller = more stable, but might be slower with bigger files
+   * 2-4 is a sweet spot
+   */
+  maxJobsPerTorrent: number('MAX_JOBS_PER_TORRENT', 2),
   jobTimeoutMs: number('JOB_TIMEOUT_S', 180) * 1000,
-  /** A torrent read that receives nothing for this long fails instead of hanging. */
+  /** A read fails when the torrent receives nothing for this long. */
   readStallMs: number('READ_STALL_S', 45) * 1000,
 
   metadataTimeoutMs: number('METADATA_TIMEOUT_S', 90) * 1000,

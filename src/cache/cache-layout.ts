@@ -49,6 +49,9 @@ export class CacheLayout {
 
   /** Disk path for a URL path relative to /<infoHash>/<fileIndex>/, e.g. "audio/2/5.m4s". */
   mediaFile(infoHash: string, fileIndex: number, relative: string): string {
-    return path.join(this.mediaDir(infoHash, fileIndex), ...relative.split('/'));
+    return path.join(
+      this.mediaDir(infoHash, fileIndex),
+      ...relative.split('/'),
+    );
   }
 }

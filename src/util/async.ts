@@ -1,6 +1,5 @@
 /**
- * Rejects with `onTimeout()` if `promise` takes too long. The underlying work
- * carries on — a segment that arrives late is still worth caching.
+ * Rejects with `onTimeout()` if `promise` takes too long.
  */
 export function withTimeout<T>(
   promise: Promise<T>,

@@ -1,4 +1,5 @@
 import {
+  aacChannels,
   codecString,
   type Rendition,
   type RenditionSet,
@@ -16,14 +17,59 @@ const SUBTITLE_GROUP = 'subs';
 
 /** ISO 639-2 codes whose BCP 47 form is a two-letter code. */
 const ISO_639_1: Record<string, string> = {
-  ara: 'ar', bul: 'bg', cat: 'ca', ces: 'cs', cze: 'cs', chi: 'zh', zho: 'zh',
-  dan: 'da', deu: 'de', ger: 'de', ell: 'el', gre: 'el', eng: 'en', spa: 'es',
-  est: 'et', fas: 'fa', per: 'fa', fin: 'fi', fra: 'fr', fre: 'fr', heb: 'he',
-  hin: 'hi', hrv: 'hr', hun: 'hu', ind: 'id', ita: 'it', jpn: 'ja', kat: 'ka',
-  geo: 'ka', kaz: 'kk', kor: 'ko', lit: 'lt', lav: 'lv', msa: 'ms', may: 'ms',
-  nld: 'nl', dut: 'nl', nor: 'no', nob: 'nb', pol: 'pl', por: 'pt', ron: 'ro',
-  rum: 'ro', rus: 'ru', slk: 'sk', slo: 'sk', slv: 'sl', srp: 'sr', swe: 'sv',
-  tha: 'th', tur: 'tr', ukr: 'uk', vie: 'vi',
+  ara: 'ar',
+  bul: 'bg',
+  cat: 'ca',
+  ces: 'cs',
+  cze: 'cs',
+  chi: 'zh',
+  zho: 'zh',
+  dan: 'da',
+  deu: 'de',
+  ger: 'de',
+  ell: 'el',
+  gre: 'el',
+  eng: 'en',
+  spa: 'es',
+  est: 'et',
+  fas: 'fa',
+  per: 'fa',
+  fin: 'fi',
+  fra: 'fr',
+  fre: 'fr',
+  heb: 'he',
+  hin: 'hi',
+  hrv: 'hr',
+  hun: 'hu',
+  ind: 'id',
+  ita: 'it',
+  jpn: 'ja',
+  kat: 'ka',
+  geo: 'ka',
+  kaz: 'kk',
+  kor: 'ko',
+  lit: 'lt',
+  lav: 'lv',
+  msa: 'ms',
+  may: 'ms',
+  nld: 'nl',
+  dut: 'nl',
+  nor: 'no',
+  nob: 'nb',
+  pol: 'pl',
+  por: 'pt',
+  ron: 'ro',
+  rum: 'ro',
+  rus: 'ru',
+  slk: 'sk',
+  slo: 'sk',
+  slv: 'sl',
+  srp: 'sr',
+  swe: 'sv',
+  tha: 'th',
+  tur: 'tr',
+  ukr: 'uk',
+  vie: 'vi',
 };
 
 const languageNames = new Intl.DisplayNames(['en'], { type: 'language' });
@@ -62,7 +108,10 @@ export function mediaPlaylist(index: MediaIndex, rendition: Rendition): string {
     lines.push('#EXT-X-MAP:URI="init.mp4"');
   }
   durations.forEach((duration, n) => {
-    lines.push(`#EXTINF:${duration.toFixed(3)},`, segmentFileName(rendition, n));
+    lines.push(
+      `#EXTINF:${duration.toFixed(3)},`,
+      segmentFileName(rendition, n),
+    );
   });
   lines.push('#EXT-X-ENDLIST');
 
@@ -83,11 +132,12 @@ export function masterPlaylist(
   const lines = ['#EXTM3U', '#EXT-X-VERSION:7', '#EXT-X-INDEPENDENT-SEGMENTS'];
 
   const defaultAudio =
-    renditions.audio.find((audio) => audio.track.isDefault) ?? renditions.audio[0];
+    renditions.audio.find((audio) => audio.track.isDefault) ??
+    renditions.audio[0];
   const audioNames = new Set<string>();
   for (const audio of renditions.audio) {
     const channels = audio.transcode
-      ? Math.min(2, audio.track.channels ?? 2)
+      ? aacChannels(audio.track)
       : (audio.track.channels ?? 2);
     lines.push(
       `#EXT-X-MEDIA:${attributes({
@@ -129,12 +179,18 @@ export function masterPlaylist(
       CODECS: codecs.every(Boolean)
         ? quoted([...new Set(codecs)].join(','))
         : undefined,
-      RESOLUTION: track.width && track.height ? `${track.width}x${track.height}` : undefined,
+      RESOLUTION:
+        track.width && track.height
+          ? `${track.width}x${track.height}`
+          : undefined,
       'FRAME-RATE': track.defaultDurationNs
         ? (1e9 / track.defaultDurationNs).toFixed(3)
         : undefined,
       AUDIO: renditions.audio.length ? quoted(AUDIO_GROUP) : undefined,
-      SUBTITLES: renditions.subtitles.length ? quoted(SUBTITLE_GROUP) : undefined,
+      SUBTITLES: renditions.subtitles.length
+        ? quoted(SUBTITLE_GROUP)
+        : undefined,
+      'CLOSED-CAPTIONS': 'NONE',
     })}`,
     uri(renditions.video),
   );

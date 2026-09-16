@@ -125,7 +125,9 @@ async function* generate(
         input.take(element.headerLength);
         inCluster = true;
         clusterEnd =
-          element.size === UNKNOWN_SIZE ? Infinity : input.position + element.size;
+          element.size === UNKNOWN_SIZE
+            ? Infinity
+            : input.position + element.size;
         clusterTs = undefined;
         clusterOpened = false;
         continue;
@@ -159,7 +161,9 @@ async function* generate(
         throw new MatroskaError('Block found before its cluster timestamp');
       }
       if (total > MAX_ELEMENT_SIZE) {
-        throw new MatroskaError(`Block of ${total} bytes exceeds the size limit`);
+        throw new MatroskaError(
+          `Block of ${total} bytes exceeds the size limit`,
+        );
       }
 
       const peekLength = Math.min(total, BLOCK_PEEK);

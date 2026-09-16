@@ -8,16 +8,19 @@ import { HlsService } from './hls/hls-service.js';
 import { Remuxer } from './hls/remux.js';
 import { createApp } from './http/app.js';
 import { errorMessage, logger } from './logger.js';
+import { guardPeerHandshakes } from './torrent/peer-guard.js';
 import { PieceCache } from './torrent/piece-store.js';
 import { TorrentManager } from './torrent/torrent-manager.js';
 import { TaskQueue } from './util/task-queue.js';
 
 async function main(): Promise<void> {
-  await runFfmpeg(config.ffmpegPath, { args: ['-version'] }).catch((err: unknown) => {
-    throw new Error(
-      `ffmpeg is not usable at "${config.ffmpegPath}" (set FFMPEG_PATH): ${errorMessage(err)}`,
-    );
-  });
+  await runFfmpeg(config.ffmpegPath, { args: ['-version'] }).catch(
+    (err: unknown) => {
+      throw new Error(
+        `ffmpeg is not usable at "${config.ffmpegPath}" (set FFMPEG_PATH): ${errorMessage(err)}`,
+      );
+    },
+  );
 
   const layout = new CacheLayout(config.cacheDir);
   // Which pieces are stored is only known in memory, so old ones can't be reused.
@@ -25,6 +28,8 @@ async function main(): Promise<void> {
   for (const dir of [layout.piecesDir, layout.torrentsDir, layout.hlsDir]) {
     await mkdir(dir, { recursive: true });
   }
+
+  await guardPeerHandshakes();
 
   const pieces = new PieceCache(layout.piecesDir, config.pieceCacheBytes);
   const segments = new SegmentCache(layout.hlsDir, config.segmentCacheBytes);
@@ -36,14 +41,20 @@ async function main(): Promise<void> {
     metadataTimeoutMs: config.metadataTimeoutMs,
     idleMs: config.torrentIdleMs,
   });
-  const queue = new TaskQueue(config.maxConcurrentJobs);
+  const queue = new TaskQueue(
+    config.maxConcurrentJobs,
+    config.maxJobsPerTorrent,
+  );
   const hls = new HlsService({
     layout,
     torrents,
     pieces,
     segments,
     queue,
-    remuxer: new Remuxer({ ffmpegPath: config.ffmpegPath, timeoutMs: config.jobTimeoutMs }),
+    remuxer: new Remuxer({
+      ffmpegPath: config.ffmpegPath,
+      timeoutMs: config.jobTimeoutMs,
+    }),
     segmentDuration: config.segmentDuration,
     prefetchSegments: config.prefetchSegments,
     prefetchAheadBytes: config.prefetchAheadBytes,
@@ -65,7 +76,9 @@ async function main(): Promise<void> {
     if (error) {
       throw error;
     }
-    logger.info(`Listening on http://localhost:${config.port}`, { cacheDir: config.cacheDir });
+    logger.info(`Listening on http://localhost:${config.port}`, {
+      cacheDir: config.cacheDir,
+    });
   });
 
   let closing = false;
@@ -86,7 +99,14 @@ async function main(): Promise<void> {
 
 // WebTorrent runs async work internally; one failing torrent shouldn't take down every stream.
 process.on('unhandledRejection', (reason) => {
+  console.log(reason);
   logger.error('Unhandled rejection', { error: errorMessage(reason) });
+});
+
+// Prevents dropping every viewer over one bad connection.
+// These are logged with their stack and the server carries on.
+process.on('uncaughtException', (err) => {
+  logger.error('Uncaught exception', { error: err.stack ?? errorMessage(err) });
 });
 
 main().catch((err: unknown) => {

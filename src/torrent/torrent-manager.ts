@@ -1,6 +1,6 @@
 import { mkdir, readFile } from 'node:fs/promises';
 import WebTorrent from 'webtorrent';
-import type { Torrent } from 'webtorrent';
+import type { Torrent, TorrentOptions } from 'webtorrent';
 
 import type { CacheLayout } from '../cache/cache-layout.js';
 import { HttpError } from '../errors.js';
@@ -60,14 +60,18 @@ export class TorrentManager {
       if (await exists(file)) {
         return;
       }
-      await mkdir(this.options.layout.torrentDir(infoHash), { recursive: true });
+      await mkdir(this.options.layout.torrentDir(infoHash), {
+        recursive: true,
+      });
       await writeFileAtomic(file, magnet);
     });
   }
 
   /** The torrent's file list; read from disk when the torrent was seen before. */
   async info(infoHash: string): Promise<TorrentInfo> {
-    const saved = await readJson<TorrentInfo>(this.options.layout.infoFile(infoHash));
+    const saved = await readJson<TorrentInfo>(
+      this.options.layout.infoFile(infoHash),
+    );
     if (saved) {
       return saved;
     }
@@ -85,12 +89,18 @@ export class TorrentManager {
   warm(infoHash: string): void {
     this.lastUsed.set(infoHash, Date.now());
     this.get(infoHash).catch((err: unknown) => {
-      logger.warn('Torrent warm-up failed', { infoHash, error: errorMessage(err) });
+      logger.warn('Torrent warm-up failed', {
+        infoHash,
+        error: errorMessage(err),
+      });
     });
   }
 
   /** Runs `task` with a ready torrent that won't be removed while it runs. */
-  async use<T>(infoHash: string, task: (torrent: Torrent) => Promise<T>): Promise<T> {
+  async use<T>(
+    infoHash: string,
+    task: (torrent: Torrent) => Promise<T>,
+  ): Promise<T> {
     this.leases.set(infoHash, (this.leases.get(infoHash) ?? 0) + 1);
     this.lastUsed.set(infoHash, Date.now());
     try {
@@ -115,14 +125,19 @@ export class TorrentManager {
       peers: torrent.numPeers,
       // Why a torrent isn't downloading is usually one of these.
       chokedBy: torrent.wires.filter((wire) => wire.peerChoking).length,
-      interested: (torrent as unknown as { _amInterested?: boolean })._amInterested ?? false,
+      interested:
+        (torrent as unknown as { _amInterested?: boolean })._amInterested ??
+        false,
       wantedRanges:
-        (torrent as unknown as { _selections?: { length: number } })._selections?.length ?? 0,
+        (torrent as unknown as { _selections?: { length: number } })._selections
+          ?.length ?? 0,
       downloadSpeed: Math.round(torrent.downloadSpeed),
       uploadSpeed: Math.round(torrent.uploadSpeed),
       downloaded: torrent.downloaded,
       activeJobs: this.leases.get(torrent.infoHash) ?? 0,
-      idleSeconds: Math.round((now - (this.lastUsed.get(torrent.infoHash) ?? now)) / 1000),
+      idleSeconds: Math.round(
+        (now - (this.lastUsed.get(torrent.infoHash) ?? now)) / 1000,
+      ),
     }));
   }
 
@@ -132,7 +147,9 @@ export class TorrentManager {
   }
 
   private find(infoHash: string): Torrent | undefined {
-    return this.client.torrents.find((torrent) => torrent.infoHash === infoHash);
+    return this.client.torrents.find(
+      (torrent) => torrent.infoHash === infoHash,
+    );
   }
 
   private async get(infoHash: string): Promise<Torrent> {
@@ -151,12 +168,22 @@ export class TorrentManager {
       readFile(layout.magnetFile(infoHash), 'utf8').catch(() => undefined),
     ]);
     if (!metadata && !magnet) {
-      throw new HttpError(404, `Unknown torrent ${infoHash}; request it by magnet link first`);
+      throw new HttpError(
+        404,
+        `Unknown torrent ${infoHash}; request it by magnet link first`,
+      );
     }
 
-    logger.info('Adding torrent', { infoHash, from: metadata ? 'saved metadata' : 'magnet' });
+    logger.info('Adding torrent', {
+      infoHash,
+      from: metadata ? 'saved metadata' : 'magnet',
+    });
     const torrent = this.client.add(metadata ?? magnet!, {
-      store: pieces.createStore,
+      // @types/webtorrent has `store` as a function it calls; WebTorrent calls
+      // it with `new`. The store is the constructor the library really wants.
+      store: pieces.createStore as unknown as NonNullable<
+        TorrentOptions['store']
+      >,
       path: pieces.directory,
       // Nothing is downloaded unless a read asks for it.
       deselect: true,
@@ -170,7 +197,9 @@ export class TorrentManager {
     // Saved metadata carries no peer addresses, so keep the magnet's direct peers.
     const peers = metadata && magnet ? peersOf(magnet) : [];
     if (peers.length) {
-      torrent.once('infoHash', () => peers.forEach((peer) => torrent.addPeer(peer)));
+      torrent.once('infoHash', () =>
+        peers.forEach((peer) => torrent.addPeer(peer)),
+      );
     }
 
     try {
@@ -184,9 +213,16 @@ export class TorrentManager {
       logger.error('Torrent error', { infoHash, error: errorMessage(err) });
     });
     await this.persist(torrent).catch((err: unknown) => {
-      logger.warn('Could not save torrent metadata', { infoHash, error: errorMessage(err) });
+      logger.warn('Could not save torrent metadata', {
+        infoHash,
+        error: errorMessage(err),
+      });
     });
-    logger.info('Torrent ready', { infoHash, name: torrent.name, peers: torrent.numPeers });
+    logger.info('Torrent ready', {
+      infoHash,
+      name: torrent.name,
+      peers: torrent.numPeers,
+    });
     return torrent;
   }
 
@@ -194,14 +230,24 @@ export class TorrentManager {
     const { layout } = this.options;
     await mkdir(layout.torrentDir(torrent.infoHash), { recursive: true });
     if (!(await exists(layout.torrentFile(torrent.infoHash)))) {
-      await writeFileAtomic(layout.torrentFile(torrent.infoHash), torrent.torrentFile);
+      await writeFileAtomic(
+        layout.torrentFile(torrent.infoHash),
+        torrent.torrentFile,
+      );
     }
     if (!(await exists(layout.infoFile(torrent.infoHash)))) {
-      await writeFileAtomic(layout.infoFile(torrent.infoHash), JSON.stringify(describe(torrent)));
+      await writeFileAtomic(
+        layout.infoFile(torrent.infoHash),
+        JSON.stringify(describe(torrent)),
+      );
     }
   }
 
   private destroy(infoHash: string, torrent: Torrent): Promise<void> {
+    // Pausing first stops WebTorrent from opening connections it would then
+    // have to unwind; a half-open one outliving its torrent used to crash the
+    // process. See guardPeerHandshakes() for the rest
+    torrent.pause();
     const pending = new Promise<void>((resolve) => {
       torrent.destroy({ destroyStore: true }, () => resolve());
     }).finally(() => this.destroying.delete(infoHash));
@@ -213,7 +259,11 @@ export class TorrentManager {
     const now = Date.now();
     // Usage records for hashes that never became a torrent (e.g. bad URLs).
     for (const [infoHash, used] of this.lastUsed) {
-      if (!this.find(infoHash) && !this.leases.has(infoHash) && now - used >= this.options.idleMs) {
+      if (
+        !this.find(infoHash) &&
+        !this.leases.has(infoHash) &&
+        now - used >= this.options.idleMs
+      ) {
         this.lastUsed.delete(infoHash);
       }
     }
@@ -267,7 +317,13 @@ function waitUntilReady(torrent: Torrent, timeoutMs: number): Promise<void> {
     const onError = (err: Error | string) =>
       finish(err instanceof Error ? err : new Error(err));
     const timer = setTimeout(
-      () => finish(new HttpError(504, 'Timed out waiting for torrent metadata; it may have no peers')),
+      () =>
+        finish(
+          new HttpError(
+            504,
+            'Timed out waiting for torrent metadata; it may have no peers',
+          ),
+        ),
       timeoutMs,
     );
 

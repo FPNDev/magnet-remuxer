@@ -28,7 +28,10 @@ export class SegmentCache {
 
   /** Registers segments left by a previous run and removes abandoned temp files. */
   async load(): Promise<void> {
-    const entries = await readdir(this.root, { recursive: true, withFileTypes: true });
+    const entries = await readdir(this.root, {
+      recursive: true,
+      withFileTypes: true,
+    });
     const segments: { file: string; bytes: number; mtimeMs: number }[] = [];
 
     for (const entry of entries) {
@@ -49,7 +52,10 @@ export class SegmentCache {
       this.lru.set(file, bytes);
     }
     await this.trim();
-    logger.info('Segment cache loaded', { segments: segments.length, bytes: this.lru.size });
+    logger.info('Segment cache loaded', {
+      segments: segments.length,
+      bytes: this.lru.size,
+    });
   }
 
   async added(file: string): Promise<void> {
@@ -65,7 +71,10 @@ export class SegmentCache {
   private async trim(): Promise<void> {
     for (const file of this.lru.trim()) {
       await rm(file, { force: true }).catch((err: unknown) => {
-        logger.warn('Could not delete evicted segment', { file, error: errorMessage(err) });
+        logger.warn('Could not delete evicted segment', {
+          file,
+          error: errorMessage(err),
+        });
       });
     }
   }

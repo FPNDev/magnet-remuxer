@@ -6,7 +6,11 @@ import path from 'node:path';
 
 import { Remuxer, TIMELINE_OFFSET_SECONDS } from '../dist/hls/remux.js';
 import { LocalFileSource } from '../dist/io/byte-source.js';
-import { codecString, getRenditions } from '../dist/media/codecs.js';
+import {
+  aacChannels,
+  codecString,
+  getRenditions,
+} from '../dist/media/codecs.js';
 import {
   buildMediaIndex,
   segmentCount,
@@ -15,6 +19,7 @@ import {
 } from '../dist/media/media-index.js';
 import {
   FFMPEG,
+  audioChannels,
   check,
   failureCount,
   firstTfdt,
@@ -27,19 +32,31 @@ import {
   workDir,
 } from './lib.mjs';
 
-const file = path.resolve(process.argv[2] ?? path.join(fixturesDir, 'movie.mkv'));
+const file = path.resolve(
+  process.argv[2] ?? path.join(fixturesDir, 'movie.mkv'),
+);
 const targetDuration = Number(process.argv[3] ?? 6);
-const out = path.join(workDir, 'remux', path.basename(file, path.extname(file)));
+const out = path.join(
+  workDir,
+  'remux',
+  path.basename(file, path.extname(file)),
+);
 await rm(out, { recursive: true, force: true });
 await mkdir(out, { recursive: true });
 
 const source = await LocalFileSource.open(file);
-const index = await buildMediaIndex(source, path.basename(file), targetDuration);
+const index = await buildMediaIndex(
+  source,
+  path.basename(file),
+  targetDuration,
+);
 const renditions = getRenditions(index);
 const remuxer = new Remuxer({ ffmpegPath: FFMPEG, timeoutMs: 60_000 });
 const count = segmentCount(index);
 
-section(`remux ${path.basename(file)} - ${count} segments, ${index.keyframes.length} keyframes in ${new Set(index.keyframes.map((k) => k.cluster)).size} clusters`);
+section(
+  `remux ${path.basename(file)} - ${count} segments, ${index.keyframes.length} keyframes in ${new Set(index.keyframes.map((k) => k.cluster)).size} clusters`,
+);
 
 const sourceDuration = await mediaDuration(file);
 const playlistDuration = segmentEnd(index, count - 1);
@@ -49,13 +66,22 @@ check(
   `${playlistDuration.toFixed(3)}s vs ${sourceDuration.toFixed(3)}s`,
 );
 
-for (const rendition of [renditions.video, ...renditions.audio, ...renditions.subtitles]) {
-  const name = rendition.type === 'video' ? 'video' : `${rendition.type}-${rendition.track.number}`;
+for (const rendition of [
+  renditions.video,
+  ...renditions.audio,
+  ...renditions.subtitles,
+]) {
+  const name =
+    rendition.type === 'video'
+      ? 'video'
+      : `${rendition.type}-${rendition.track.number}`;
   const label = `${name} (${rendition.track.codecId} → ${codecString(rendition)})`;
   const dir = path.join(out, name);
   await mkdir(dir, { recursive: true });
 
-  const streamIndex = index.tracks.findIndex((track) => track.number === rendition.track.number);
+  const streamIndex = index.tracks.findIndex(
+    (track) => track.number === rendition.track.number,
+  );
   const isSubtitle = rendition.type === 'subtitle';
   const started = Date.now();
 
@@ -78,7 +104,11 @@ for (const rendition of [renditions.video, ...renditions.audio, ...renditions.su
       cues += (text.match(/-->/g) ?? []).length;
     }
     const expected = await packetCount(file, streamIndex);
-    check(cues === expected, `${label}: every cue appears exactly once`, `${cues}/${expected} cues in ${ms} ms`);
+    check(
+      cues === expected,
+      `${label}: every cue appears exactly once`,
+      `${cues}/${expected} cues in ${ms} ms`,
+    );
     continue;
   }
 
@@ -91,7 +121,10 @@ for (const rendition of [renditions.video, ...renditions.audio, ...renditions.su
     const segment = await readFile(path.join(dir, `${n}.m4s`));
     parts.push(segment);
     const start = firstTfdt(segment) / timescale - TIMELINE_OFFSET_SECONDS;
-    worstOffset = Math.max(worstOffset, Math.abs(start - segmentStart(index, n)));
+    worstOffset = Math.max(
+      worstOffset,
+      Math.abs(start - segmentStart(index, n)),
+    );
   }
   const full = path.join(dir, 'full.mp4');
   await writeFile(full, Buffer.concat(parts));
@@ -122,13 +155,29 @@ for (const rendition of [renditions.video, ...renditions.audio, ...renditions.su
       `${label}: AAC frames are contiguous across segment boundaries`,
       `${produced.length} frames, ${gaps} gaps, ${regressions} dts regressions, ${ms} ms`,
     );
+
+    // The init section is encoded from silence, so it has to agree with the
+    // segments - and with what the playlist tells the player to expect.
+    const expected = aacChannels(rendition.track);
+    const actual = await audioChannels(full);
+    check(
+      actual === expected,
+      `${label}: init and segments agree on ${expected} channels`,
+      `source has ${rendition.track.channels}, output has ${actual}`,
+    );
   } else {
     const expected = await packetCount(file, streamIndex);
-    const sourcePts = (await packets(file, String(streamIndex))).map(([pts]) => pts).sort((a, b) => a - b);
-    const outputPts = produced
-      .map(([pts]) => Math.round((pts / timescale - TIMELINE_OFFSET_SECONDS) * 1000))
+    const sourcePts = (await packets(file, String(streamIndex)))
+      .map(([pts]) => pts)
       .sort((a, b) => a - b);
-    const mismatches = sourcePts.filter((pts, i) => Math.abs(pts - outputPts[i]) > 1).length;
+    const outputPts = produced
+      .map(([pts]) =>
+        Math.round((pts / timescale - TIMELINE_OFFSET_SECONDS) * 1000),
+      )
+      .sort((a, b) => a - b);
+    const mismatches = sourcePts.filter(
+      (pts, i) => Math.abs(pts - outputPts[i]) > 1,
+    ).length;
 
     check(
       produced.length === expected && mismatches === 0 && regressions === 0,

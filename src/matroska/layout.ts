@@ -73,7 +73,10 @@ class CachedReader {
   }
 
   /** Reads a whole sized element; undefined if its ID isn't `expectedId`. */
-  async element(pos: number, expectedId?: number): Promise<RawElement | undefined> {
+  async element(
+    pos: number,
+    expectedId?: number,
+  ): Promise<RawElement | undefined> {
     const header = await this.header(pos);
     if (expectedId !== undefined && header.id !== expectedId) {
       return undefined;
@@ -236,7 +239,13 @@ export async function readMatroskaLayout(
   }
 
   let mediaEnd = segmentEnd;
-  for (const id of [Id.Cues, Id.Tags, Id.Attachments, Id.Chapters, Id.SeekHead]) {
+  for (const id of [
+    Id.Cues,
+    Id.Tags,
+    Id.Attachments,
+    Id.Chapters,
+    Id.SeekHead,
+  ]) {
     for (const at of seeks.get(id) ?? []) {
       if (at > firstCluster && at < mediaEnd) {
         mediaEnd = at;

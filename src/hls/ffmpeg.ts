@@ -24,7 +24,11 @@ export interface FfmpegRun {
 }
 
 const STDERR_LIMIT = 16 * 1024;
-const BROKEN_PIPE_CODES = new Set(['EPIPE', 'EOF', 'ERR_STREAM_PREMATURE_CLOSE']);
+const BROKEN_PIPE_CODES = new Set([
+  'EPIPE',
+  'EOF',
+  'ERR_STREAM_PREMATURE_CLOSE',
+]);
 
 const running = new Set<ChildProcess>();
 
@@ -48,7 +52,11 @@ export async function runFfmpeg(
     ffmpegPath,
     ['-hide_banner', '-nostats', '-loglevel', 'error', ...run.args],
     {
-      stdio: [run.input ? 'pipe' : 'ignore', run.output ? 'pipe' : 'ignore', 'pipe'],
+      stdio: [
+        run.input ? 'pipe' : 'ignore',
+        run.output ? 'pipe' : 'ignore',
+        'pipe',
+      ],
       windowsHide: true,
     },
   );
@@ -78,7 +86,13 @@ export async function runFfmpeg(
   run.signal?.addEventListener('abort', onAbort, { once: true });
   const timer = run.timeoutMs
     ? setTimeout(
-        () => kill(new FfmpegError(`ffmpeg timed out after ${run.timeoutMs} ms`, stderr)),
+        () =>
+          kill(
+            new FfmpegError(
+              `ffmpeg timed out after ${run.timeoutMs} ms`,
+              stderr,
+            ),
+          ),
         run.timeoutMs,
       )
     : undefined;

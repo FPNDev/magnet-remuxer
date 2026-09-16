@@ -4,7 +4,11 @@ import { readMatroskaLayout } from '../matroska/layout.js';
 import type { SliceRange } from '../matroska/slicer.js';
 import type { MkvTrack } from '../matroska/tracks.js';
 
-export const MEDIA_INDEX_VERSION = 1;
+/**
+ * Bumped whenever rendered output changes shape, which throws away anything
+ * cached from an older build.
+ */
+export const MEDIA_INDEX_VERSION = 2;
 
 export interface Keyframe {
   /** Timestamp in Matroska ticks. */

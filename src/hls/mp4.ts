@@ -43,15 +43,20 @@ export class Fmp4Splitter extends Transform {
 
   override _flush(callback: TransformCallback): void {
     const truncated =
-      this.header.length > 0 || (this.remaining > 0 && this.remaining !== Infinity);
+      this.header.length > 0 ||
+      (this.remaining > 0 && this.remaining !== Infinity);
     callback(truncated ? new Error('Truncated MP4 output') : null);
   }
 
   private readHeader(chunk: Buffer, offset: number): number {
-    const largeSize = this.header.length >= 8 && this.header.readUInt32BE(0) === 1;
+    const largeSize =
+      this.header.length >= 8 && this.header.readUInt32BE(0) === 1;
     const wanted = (largeSize ? 16 : 8) - this.header.length;
     const taken = Math.min(wanted, chunk.length - offset);
-    this.header = Buffer.concat([this.header, chunk.subarray(offset, offset + taken)]);
+    this.header = Buffer.concat([
+      this.header,
+      chunk.subarray(offset, offset + taken),
+    ]);
     offset += taken;
 
     if (this.header.length < 8) {

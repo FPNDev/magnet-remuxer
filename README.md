@@ -23,12 +23,12 @@ npm test             # builds, then runs the suites in test/ (see test/README.md
 
 ## Endpoints
 
-| Endpoint | Purpose |
-| --- | --- |
-| `GET /m3u8?magnet=<link>[&file=<index>]` | Master playlist. Without `file`, the largest MKV/WebM in the torrent is used. |
-| `GET /files?magnet=<link>` | Files in the torrent, flagging which are playable. |
-| `GET /status` | Torrents, peers, job queue and cache sizes. |
-| `GET /<infoHash>/<fileIndex>/...` | Media playlists, init sections and segments, as referenced by the master playlist. |
+| Endpoint                                 | Purpose                                                                            |
+| ---------------------------------------- | ---------------------------------------------------------------------------------- |
+| `GET /m3u8?magnet=<link>[&file=<index>]` | Master playlist. Without `file`, the largest MKV/WebM in the torrent is used.      |
+| `GET /files?magnet=<link>`               | Files in the torrent, flagging which are playable.                                 |
+| `GET /status`                            | Torrents, peers, job queue and cache sizes.                                        |
+| `GET /<infoHash>/<fileIndex>/...`        | Media playlists, init sections and segments, as referenced by the master playlist. |
 
 Everything below `/<infoHash>/<fileIndex>/` mirrors the cache layout on disk:
 
@@ -65,13 +65,18 @@ segment URL is stable for a given torrent, file and track.
 ### Tracks
 
 Video is always copied (H.264, HEVC, AV1, VP9). Audio is copied when browsers can
-play it from fMP4 (AAC, MP3, Opus, FLAC) and converted to AAC stereo otherwise
-(AC3, E-AC3, DTS, TrueHD, …). Every audio track becomes an HLS alternate
-rendition, and every text subtitle track (SRT/ASS/SSA/WebVTT) a WebVTT rendition.
-Image subtitles (PGS, VobSub) are skipped.
+play it from fMP4 (AAC, MP3, Opus, FLAC) and converted to AAC otherwise (AC3,
+E-AC3, DTS, TrueHD, ...), keeping the source's channel layout up to 5.1; anything
+wider is folded down to that, since eight-channel support is patchy. Every audio
+track becomes an HLS alternate rendition, and every text subtitle track
+(SRT/ASS/SSA/WebVTT) a WebVTT rendition. Image subtitles (PGS, VobSub) are
+skipped.
 
 Converted audio is encoded with padding on both sides of each segment, which is
-then dropped, so segments meet on the AAC frame grid without gaps or clicks.
+then dropped, so segments meet on the AAC frame grid without gaps or clicks. Its
+init section is encoded from silence rather than from the source: the moov
+describes our AAC output either way, and DTS and TrueHD report no stream format
+at all until they have decoded a frame, which a header alone never gives them.
 
 ### Timestamps
 
@@ -81,25 +86,44 @@ does. WebVTT segments carry the matching `X-TIMESTAMP-MAP`.
 
 ## Configuration
 
-All optional; defaults in `src/config.ts`.
+All optional; `.env.example` lists every one of them at its default, and
+`src/config.ts` is where those defaults live.
 
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `PORT` | `3000` | HTTP port. |
-| `FFMPEG_PATH` | `ffmpeg` | ffmpeg binary. |
-| `CACHE_DIR` | `<tmp>/magnet-cache` | Where pieces, playlists and segments live. |
-| `PIECE_CACHE_MB` | `8192` | Disk budget for all cached torrent pieces together. |
-| `SEGMENT_CACHE_MB` | `10240` | Disk budget for rendered segments. |
-| `SEGMENT_DURATION` | `6` | Target segment length in seconds. |
-| `PREFETCH_SEGMENTS` | `3` | Segments rendered ahead of the player. |
-| `PREFETCH_AHEAD_MB` | `96` | Cap on prefetch by bytes read; segments of a big 4K remux might be tens of MB each. |
-| `REQUEST_TIMEOUT_S` | `120` | A request waiting longer than this fails with 504. |
-| `MAX_CONCURRENT_JOBS` | `max(4, cpus)` | Concurrent ffmpeg jobs. |
-| `JOB_TIMEOUT_S` | `180` | Hard limit for one segment job. |
-| `READ_STALL_S` | `45` | Fail a torrent read that receives nothing for this long. |
-| `METADATA_TIMEOUT_S` | `90` | How long to wait for torrent metadata. |
-| `TORRENT_IDLE_S` | `600` | Remove torrents unused for this long. |
-| `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`. |
+| Variable               | Default              | Meaning                                                                                                                              |
+| ---------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `PORT`                 | `3000`               | HTTP port.                                                                                                                           |
+| `FFMPEG_PATH`          | `ffmpeg`             | ffmpeg binary.                                                                                                                       |
+| `CACHE_DIR`            | `<tmp>/magnet-cache` | Where pieces, playlists and segments live.                                                                                           |
+| `PIECE_CACHE_MB`       | `8192`               | Disk budget for all cached torrent pieces together.                                                                                  |
+| `SEGMENT_CACHE_MB`     | `15360`              | Disk budget for rendered segments.                                                                                                   |
+| `SEGMENT_DURATION`     | `6`                  | Target segment length in seconds.                                                                                                    |
+| `PREFETCH_SEGMENTS`    | `3`                  | Segments rendered ahead of the player.                                                                                               |
+| `PREFETCH_AHEAD_MB`    | `96`                 | Cap on prefetch by bytes read; segments of a big 4K remux might be tens of MB each.                                                  |
+| `REQUEST_TIMEOUT_S`    | `120`                | A request waiting longer than this fails with 504.                                                                                   |
+| `MAX_CONCURRENT_JOBS`  | `max(16, cpus)`      | Concurrent ffmpeg jobs across all torrents. Mostly waiting on the swarm rather than on CPU, so more than one per core is reasonable. |
+| `MAX_JOBS_PER_TORRENT` | `2`                  | Of those, how many may read one torrent. Reads of the same torrent divide its bandwidth rather than adding to it.                    |
+| `JOB_TIMEOUT_S`        | `180`                | Hard limit for one segment job.                                                                                                      |
+| `READ_STALL_S`         | `45`                 | Fail a read when the _torrent_ receives nothing for this long.                                                                       |
+| `METADATA_TIMEOUT_S`   | `90`                 | How long to wait for torrent metadata.                                                                                               |
+| `TORRENT_IDLE_S`       | `600`                | Remove torrents unused for this long.                                                                                                |
+| `LOG_LEVEL`            | `info`               | `debug`, `info`, `warn` or `error`.                                                                                                  |
+
+### Why reads queue
+
+A torrent's peers hand over a fixed number of bytes per second, and WebTorrent
+serves each read one whole piece at a time - so a read produces nothing at all
+until its current piece lands. On a release with 16 MiB pieces that is the unit
+of latency, and opening more reads does not make the torrent faster: it divides
+the same bandwidth further, until every read is slower than a player will wait.
+A dozen reads sharing 4 MiB/s put a 16 MiB piece about 50 seconds away.
+
+So jobs on one torrent queue rather than compete (`MAX_JOBS_PER_TORRENT`), and a
+player waiting for a segment preempts prefetching that holds its torrent's slots
+even when the pool is half empty - which is what makes a seek fast, since the
+prefetches left behind at the old position would otherwise run to completion.
+
+`test/bandwidth.mjs` measures the trade-off against a throttled seeder if you
+want to pick the number for your own connection.
 
 ## Cache layout
 
@@ -117,7 +141,7 @@ later request needs it.
 
 One budget covers every torrent, file and viewer rather than one per file: on a
 busy title dozens of players read different parts of the same remux, and
-whichever ranges are hot should stay resident. 
+whichever ranges are hot should stay resident.
 
 Saved torrent metadata means a restart doesn't re-fetch metadata from peers, and
 cached playlists and segments are served without touching the swarm at all.

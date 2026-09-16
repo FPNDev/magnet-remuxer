@@ -51,7 +51,10 @@ const TEXT_SUBTITLES = new Set([
   'S_SSA',
 ]);
 
-const AAC_SAMPLE_RATES = [48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000];
+const AAC_SAMPLE_RATES = [
+  48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000,
+];
+const MAX_AAC_CHANNELS = 6;
 
 const OTHER_AUDIO_CODECS: Record<string, string> = {
   'A_MPEG/L3': 'mp4a.40.34',
@@ -73,13 +76,11 @@ export function getRenditions(index: MediaIndex): RenditionSet {
     video: { type: 'video', track: video, codec },
     audio: index.tracks
       .filter((t) => t.kind === 'audio' && !UNSUPPORTED_AUDIO.test(t.codecId))
-      .map(
-        (track): AudioRendition => ({
-          type: 'audio',
-          track,
-          transcode: !COPYABLE_AUDIO.test(track.codecId),
-        }),
-      ),
+      .map((track): AudioRendition => ({
+        type: 'audio',
+        track,
+        transcode: !COPYABLE_AUDIO.test(track.codecId),
+      })),
     subtitles: index.tracks
       .filter((t) => t.kind === 'subtitle' && TEXT_SUBTITLES.has(t.codecId))
       .map((track): SubtitleRendition => ({ type: 'subtitle', track })),
@@ -90,6 +91,18 @@ export function getRenditions(index: MediaIndex): RenditionSet {
 export function aacSampleRate(track: MkvTrack): number {
   const rate = Math.round(track.sampleRate ?? 48000);
   return AAC_SAMPLE_RATES.includes(rate) ? rate : 48000;
+}
+
+/**
+ * Output channel count for AAC conversion. Surround is kept - browsers decode
+ * 5.1 from fMP4 - but 7.1 is folded down to it, because support for eight
+ * channels is patchy and impact on performance is not worth it.
+ */
+export function aacChannels(track: MkvTrack): number {
+  return Math.min(
+    MAX_AAC_CHANNELS,
+    Math.max(1, Math.round(track.channels ?? 2)),
+  );
 }
 
 /** RFC 6381 codec string for HLS CODECS attributes, when derivable. */
