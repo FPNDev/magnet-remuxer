@@ -3,18 +3,10 @@ export class SizeLru<K> {
   private readonly entries = new Map<K, number>();
   private totalBytes = 0;
 
-  constructor(private budgetBytes: number) {}
+  constructor(private readonly budgetBytes: number) {}
 
   get size(): number {
     return this.totalBytes;
-  }
-
-  get budget(): number {
-    return this.budgetBytes;
-  }
-
-  setBudget(bytes: number): void {
-    this.budgetBytes = bytes;
   }
 
   set(key: K, bytes: number): void {

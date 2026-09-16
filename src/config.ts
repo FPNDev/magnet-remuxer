@@ -22,12 +22,12 @@ export const config = {
   ffmpegPath: env.FFMPEG_PATH || 'ffmpeg',
   cacheDir: path.resolve(env.CACHE_DIR || path.join(os.tmpdir(), 'magnet-cache')),
 
-  /** Disk budget for all cached torrent pieces together. */
-  pieceCacheBytes: number('PIECE_CACHE_MB', 2048) * MiB,
-  /** Disk budget for the pieces of each individual file being streamed. */
-  pieceCachePerFileBytes: number('PIECE_CACHE_PER_FILE_MB', 512) * MiB,
+  /**
+   * Disk budget for all cached torrent pieces, shared by every torrent.
+   */
+  pieceCacheBytes: number('PIECE_CACHE_MB', 8192) * MiB,
   /** Disk budget for rendered HLS segments. */
-  segmentCacheBytes: number('SEGMENT_CACHE_MB', 10240) * MiB,
+  segmentCacheBytes: number('SEGMENT_CACHE_MB', 15360) * MiB,
 
   /** Target HLS segment length in seconds; real segments follow keyframes. */
   segmentDuration: number('SEGMENT_DURATION', 6),
@@ -40,7 +40,7 @@ export const config = {
   prefetchAheadBytes: number('PREFETCH_AHEAD_MB', 96) * MiB,
   /** A request waiting longer than this for its segment fails instead of hanging. */
   requestTimeoutMs: number('REQUEST_TIMEOUT_S', 120) * 1000,
-  maxConcurrentJobs: number('MAX_CONCURRENT_JOBS', Math.max(4, os.availableParallelism())),
+  maxConcurrentJobs: number('MAX_CONCURRENT_JOBS', Math.max(16, os.availableParallelism())),
   jobTimeoutMs: number('JOB_TIMEOUT_S', 180) * 1000,
   /** A torrent read that receives nothing for this long fails instead of hanging. */
   readStallMs: number('READ_STALL_S', 45) * 1000,

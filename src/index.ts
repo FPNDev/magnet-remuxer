@@ -26,11 +26,7 @@ async function main(): Promise<void> {
     await mkdir(dir, { recursive: true });
   }
 
-  const pieces = new PieceCache(
-    layout.piecesDir,
-    config.pieceCachePerFileBytes,
-    config.pieceCacheBytes,
-  );
+  const pieces = new PieceCache(layout.piecesDir, config.pieceCacheBytes);
   const segments = new SegmentCache(layout.hlsDir, config.segmentCacheBytes);
   await segments.load();
 
@@ -61,7 +57,6 @@ async function main(): Promise<void> {
       torrents: torrents.status(),
       jobs: queue.stats,
       pieceCacheBytes: pieces.usedBytes,
-      pieceCacheFiles: pieces.windowCount,
       segmentCacheBytes: segments.usedBytes,
     }),
   });

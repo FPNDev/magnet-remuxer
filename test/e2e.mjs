@@ -88,7 +88,7 @@ let a = await startServer({
   name: 'a',
   port: basePort,
   cacheDir: cacheA,
-  env: { PIECE_CACHE_MB: '8', PIECE_CACHE_PER_FILE_MB: '8' },
+  env: { PIECE_CACHE_MB: '8' },
 });
 
 check((await get(`${a.base}/m3u8`, false)).status === 400, 'missing magnet → 400');

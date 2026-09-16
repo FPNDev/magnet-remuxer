@@ -88,8 +88,7 @@ All optional; defaults in `src/config.ts`.
 | `PORT` | `3000` | HTTP port. |
 | `FFMPEG_PATH` | `ffmpeg` | ffmpeg binary. |
 | `CACHE_DIR` | `<tmp>/magnet-cache` | Where pieces, playlists and segments live. |
-| `PIECE_CACHE_MB` | `2048` | Disk budget for all cached torrent pieces together. |
-| `PIECE_CACHE_PER_FILE_MB` | `512` | Disk budget for the pieces of each file being streamed. |
+| `PIECE_CACHE_MB` | `8192` | Disk budget for all cached torrent pieces together. |
 | `SEGMENT_CACHE_MB` | `10240` | Disk budget for rendered segments. |
 | `SEGMENT_DURATION` | `6` | Target segment length in seconds. |
 | `PREFETCH_SEGMENTS` | `3` | Segments rendered ahead of the player. |
@@ -116,11 +115,9 @@ budget is reached, and peers are told the pieces were dropped (BEP 54) so they
 don't mistake the server for a seeder. Anything dropped is downloaded again if a
 later request needs it.
 
-Each file being streamed gets its own window of `PIECE_CACHE_PER_FILE_MB`, so
-streaming one episode of a pack never evicts another's, with `PIECE_CACHE_MB`
-capping the total. Pieces themselves belong to the torrent rather than to a file
-- one can straddle a file boundary - so they are stored once per torrent and
-shared; each counts towards the window of the file it mostly covers.
+One budget covers every torrent, file and viewer rather than one per file: on a
+busy title dozens of players read different parts of the same remux, and
+whichever ranges are hot should stay resident. 
 
 Saved torrent metadata means a restart doesn't re-fetch metadata from peers, and
 cached playlists and segments are served without touching the swarm at all.

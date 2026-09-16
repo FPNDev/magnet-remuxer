@@ -75,7 +75,7 @@ const server = await startServer({
   name: 'multi',
   port: basePort,
   cacheDir,
-  env: { PIECE_CACHE_MB: '24', PIECE_CACHE_PER_FILE_MB: '8' },
+  env: { PIECE_CACHE_MB: '24' },
 });
 
 // ---- two separate torrents at the same time --------------------------------

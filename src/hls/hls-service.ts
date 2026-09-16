@@ -189,17 +189,7 @@ export class HlsService {
   private async getIndex(infoHash: string, fileIndex: number): Promise<MediaIndex> {
     const key = `${infoHash}/${fileIndex}`;
     const cached = this.indexes.get(key);
-    const index = cached ?? (await this.buildOrLoadIndex(infoHash, fileIndex, key));
-
-    // Every rendition of a segment reads the same bytes, and a 4K remux has far
-    // bigger segments than the default window, so size the window to the file.
-    const perSegment = bytesPerSegment(index);
-    this.options.pieces.reserveWindow(
-      infoHash,
-      fileIndex,
-      Math.ceil((this.prefetchDepth(index) + 2) * perSegment),
-    );
-    return index;
+    return cached ?? (await this.buildOrLoadIndex(infoHash, fileIndex, key));
   }
 
   private buildOrLoadIndex(

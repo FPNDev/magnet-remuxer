@@ -1,6 +1,6 @@
 // Exercises the sliding piece cache against a local peer, using a torrent with
-// two files: each file gets its own window, streaming one must not evict the
-// other, and anything dropped must download again on demand.
+// two files: one budget covers everything, it follows whoever is reading, and
+// anything it drops is downloaded again on demand.
 import { readdirSync, rmSync } from 'node:fs';
 import { copyFile, mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -18,8 +18,7 @@ import {
   workDir,
 } from './lib.mjs';
 
-const PER_FILE_MB = 8;
-const TOTAL_MB = 64;
+const BUDGET_MB = 8;
 const HEAD_BYTES = 1_000_000;
 const MiB = 1024 * 1024;
 
@@ -29,17 +28,17 @@ rmSync(dir, { recursive: true, force: true });
 rmSync(pack, { recursive: true, force: true });
 await mkdir(pack, { recursive: true });
 
-// Two sizeable files in one torrent, so the per-file windows are visible.
+// Two sizeable files in one torrent, both far larger than the budget.
 const source = path.join(fixturesDir, 'movie.mkv');
 await copyFile(source, path.join(pack, 'a.mkv'));
 await copyFile(source, path.join(pack, 'b.mkv'));
 
-section(`piece cache - ${PER_FILE_MB} MiB per file, ${TOTAL_MB} MiB total, two files`);
+section(`piece cache - ${BUDGET_MB} MiB shared budget, two files`);
 
 const { client: seeder, torrent: seeded, magnet } = await seedFixture(pack);
 const { default: WebTorrent } = await import('webtorrent');
 
-const cache = new PieceCache(dir, PER_FILE_MB * MiB, TOTAL_MB * MiB);
+const cache = new PieceCache(dir, BUDGET_MB * MiB);
 const client = new WebTorrent();
 const torrent = client.add(magnet, {
   store: cache.createStore,
@@ -80,30 +79,22 @@ check((await readRange(readerA, 0, HEAD_BYTES)).equals(expectedHead), 'reads ret
 
 const slack = 2 * torrent.pieceLength;
 const streamedA = await stream(readerA, fileA);
-const afterA = cachedBytes(fileA);
 check(
-  afterA <= PER_FILE_MB * MiB + slack,
-  'a file keeps only its own window while streaming',
-  `${(afterA / MiB).toFixed(1)} MiB cached after streaming ${(fileA.length / MiB).toFixed(0)} MiB in ${streamedA} ms`,
+  directorySize(dir) <= BUDGET_MB * MiB + slack,
+  'the cache stays within its budget while streaming',
+  `${(directorySize(dir) / MiB).toFixed(1)} MiB held after streaming ${(fileA.length / MiB).toFixed(0)} MiB in ${streamedA} ms`,
 );
 
 const streamedB = await stream(readerB, fileB);
-const keptA = cachedBytes(fileA);
-const keptB = cachedBytes(fileB);
 check(
-  keptA >= afterA - slack,
-  'streaming a second file does not evict the first file’s window',
-  `file A kept ${(keptA / MiB).toFixed(1)} MiB of ${(afterA / MiB).toFixed(1)} MiB`,
+  directorySize(dir) <= BUDGET_MB * MiB + slack,
+  'one budget covers both files of the torrent',
+  `${(directorySize(dir) / MiB).toFixed(1)} MiB held after streaming both files`,
 );
 check(
-  keptB <= PER_FILE_MB * MiB + slack,
-  'the second file gets its own window',
-  `${(keptB / MiB).toFixed(1)} MiB cached in ${streamedB} ms`,
-);
-check(
-  directorySize(dir) <= TOTAL_MB * MiB,
-  'the cache as a whole stays under the total budget',
-  `${(directorySize(dir) / MiB).toFixed(1)} MiB on disk across ${cache.windowCount} file windows`,
+  cachedBytes(fileB) > cachedBytes(fileA),
+  'the cache follows whoever is reading',
+  `file A ${(cachedBytes(fileA) / MiB).toFixed(1)} MiB, file B ${(cachedBytes(fileB) / MiB).toFixed(1)} MiB after ${streamedB} ms`,
 );
 
 const folders = readdirSync(dir);
