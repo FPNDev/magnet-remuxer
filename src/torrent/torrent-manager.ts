@@ -57,7 +57,9 @@ export class TorrentManager {
   remember(infoHash: string, magnet: string): Promise<void> {
     return this.flights.run(`remember:${infoHash}`, async () => {
       const file = this.options.layout.magnetFile(infoHash);
-      if (await exists(file)) return;
+      if (await exists(file)) {
+        return;
+      }
       await mkdir(this.options.layout.torrentDir(infoHash), { recursive: true });
       await writeFileAtomic(file, magnet);
     });
@@ -66,7 +68,9 @@ export class TorrentManager {
   /** The torrent's file list; read from disk when the torrent was seen before. */
   async info(infoHash: string): Promise<TorrentInfo> {
     const saved = await readJson<TorrentInfo>(this.options.layout.infoFile(infoHash));
-    if (saved) return saved;
+    if (saved) {
+      return saved;
+    }
     return this.use(infoHash, async (torrent) => describe(torrent));
   }
 
@@ -93,8 +97,11 @@ export class TorrentManager {
       return await task(await this.get(infoHash));
     } finally {
       const remaining = (this.leases.get(infoHash) ?? 1) - 1;
-      if (remaining > 0) this.leases.set(infoHash, remaining);
-      else this.leases.delete(infoHash);
+      if (remaining > 0) {
+        this.leases.set(infoHash, remaining);
+      } else {
+        this.leases.delete(infoHash);
+      }
       this.lastUsed.set(infoHash, Date.now());
     }
   }
@@ -157,6 +164,9 @@ export class TorrentManager {
       destroyStoreOnDestroy: true,
       announce: magnet ? trackersOf(magnet) : [],
     });
+    // WebTorrent adds a 'verified' listener per piece each read waits on, so
+    // concurrent reads trip Node's default limit of 10 listeners.
+    torrent.setMaxListeners(200);
     // Saved metadata carries no peer addresses, so keep the magnet's direct peers.
     const peers = metadata && magnet ? peersOf(magnet) : [];
     if (peers.length) {
@@ -210,8 +220,12 @@ export class TorrentManager {
 
     for (const torrent of this.client.torrents) {
       const { infoHash } = torrent;
-      if (!infoHash || !torrent.ready || this.leases.has(infoHash)) continue;
-      if (now - (this.lastUsed.get(infoHash) ?? 0) < this.options.idleMs) continue;
+      if (!infoHash || !torrent.ready || this.leases.has(infoHash)) {
+        continue;
+      }
+      if (now - (this.lastUsed.get(infoHash) ?? 0) < this.options.idleMs) {
+        continue;
+      }
 
       logger.info('Removing idle torrent', { infoHash, name: torrent.name });
       this.lastUsed.delete(infoHash);
@@ -243,8 +257,11 @@ function waitUntilReady(torrent: Torrent, timeoutMs: number): Promise<void> {
       clearTimeout(timer);
       torrent.removeListener('ready', onReady);
       torrent.removeListener('error', onError);
-      if (err) reject(err);
-      else resolve();
+      if (err) {
+        reject(err);
+      } else {
+        resolve();
+      }
     };
     const onReady = () => finish();
     const onError = (err: Error | string) =>

@@ -16,13 +16,21 @@ export function parseInfoHash(magnet: string): string {
   } catch {
     throw new HttpError(400, 'Invalid magnet link');
   }
-  if (url.protocol !== 'magnet:') throw new HttpError(400, 'Invalid magnet link');
+  if (url.protocol !== 'magnet:') {
+    throw new HttpError(400, 'Invalid magnet link');
+  }
 
   for (const xt of url.searchParams.getAll('xt')) {
     const hash = /^urn:btih:(.+)$/i.exec(xt)?.[1];
-    if (!hash) continue;
-    if (HEX_HASH.test(hash)) return hash.toLowerCase();
-    if (BASE32_HASH.test(hash)) return base32ToHex(hash);
+    if (!hash) {
+      continue;
+    }
+    if (HEX_HASH.test(hash)) {
+      return hash.toLowerCase();
+    }
+    if (BASE32_HASH.test(hash)) {
+      return base32ToHex(hash);
+    }
   }
   throw new HttpError(400, 'Magnet link has no BitTorrent info hash');
 }

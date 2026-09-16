@@ -32,7 +32,9 @@ export class SegmentCache {
     const segments: { file: string; bytes: number; mtimeMs: number }[] = [];
 
     for (const entry of entries) {
-      if (!entry.isFile()) continue;
+      if (!entry.isFile()) {
+        continue;
+      }
       const file = path.join(entry.parentPath, entry.name);
       if (entry.name.endsWith(TEMP_SUFFIX)) {
         await rm(file, { force: true });
@@ -43,7 +45,9 @@ export class SegmentCache {
     }
 
     segments.sort((a, b) => a.mtimeMs - b.mtimeMs);
-    for (const { file, bytes } of segments) this.lru.set(file, bytes);
+    for (const { file, bytes } of segments) {
+      this.lru.set(file, bytes);
+    }
     await this.trim();
     logger.info('Segment cache loaded', { segments: segments.length, bytes: this.lru.size });
   }

@@ -45,6 +45,7 @@ export class PieceCache {
   private readonly pins = new Map<string, number>();
   private readonly windows = new Map<string, SizeLru<string>>();
   private readonly windowOf = new Map<string, string>();
+  private readonly windowBudgets = new Map<string, number>();
   private readonly total: SizeLru<string>;
 
   /**
@@ -77,6 +78,27 @@ export class PieceCache {
     return this.windows.size;
   }
 
+  /**
+   * Raises one file's window so a working set of `bytes` fits. A 4K remux has
+   * far bigger segments than the default window, and every rendition of a
+   * segment reads the same bytes, so too small a window means re-downloading
+   * what was just read. Never shrinks a window, and never takes more than half
+   * the total budget.
+   */
+  reserveWindow(infoHash: string, fileIndex: number, bytes: number): void {
+    const key = windowKey(infoHash, fileIndex);
+    const budget = Math.max(
+      this.perFileBytes,
+      Math.min(bytes, Math.floor(this.total.budget / 2)),
+    );
+    if ((this.windowBudgets.get(key) ?? 0) >= budget) {
+      return;
+    }
+
+    this.windowBudgets.set(key, budget);
+    this.windows.get(key)?.setBudget(budget);
+  }
+
   /** Protects pieces [first, last] from eviction until the returned function is called. */
   pin(infoHash: string, first: number, last: number): () => void {
     for (let i = first; i <= last; i++) {
@@ -86,13 +108,18 @@ export class PieceCache {
 
     let released = false;
     return () => {
-      if (released) return;
+      if (released) {
+        return;
+      }
       released = true;
       for (let i = first; i <= last; i++) {
         const key = pieceKey(infoHash, i);
         const count = (this.pins.get(key) ?? 1) - 1;
-        if (count > 0) this.pins.set(key, count);
-        else this.pins.delete(key);
+        if (count > 0) {
+          this.pins.set(key, count);
+        } else {
+          this.pins.delete(key);
+        }
       }
       this.trim();
     };
@@ -111,19 +138,25 @@ export class PieceCache {
   touched(store: SlidingPieceStore, index: number): void {
     const key = pieceKey(store.infoHash, index);
     const window = this.windowOf.get(key);
-    if (window) this.windows.get(window)?.touch(key);
+    if (window) {
+      this.windows.get(window)?.touch(key);
+    }
     this.total.touch(key);
   }
 
   removed(store: SlidingPieceStore, indexes: Iterable<number>): void {
-    for (const index of indexes) this.forget(pieceKey(store.infoHash, index));
-    if (this.stores.get(store.infoHash) === store) this.stores.delete(store.infoHash);
+    for (const index of indexes) {
+      this.forget(pieceKey(store.infoHash, index));
+    }
+    if (this.stores.get(store.infoHash) === store) {
+      this.stores.delete(store.infoHash);
+    }
   }
 
   private windowFor(window: string): SizeLru<string> {
     let lru = this.windows.get(window);
     if (!lru) {
-      lru = new SizeLru(this.perFileBytes);
+      lru = new SizeLru(this.windowBudgets.get(window) ?? this.perFileBytes);
       this.windows.set(window, lru);
     }
     return lru;
@@ -134,10 +167,16 @@ export class PieceCache {
     const isPinned = (key: string) => this.pins.has(key);
 
     for (const [window, lru] of this.windows) {
-      for (const key of lru.trim(isPinned)) this.evict(key);
-      if (lru.size === 0) this.windows.delete(window);
+      for (const key of lru.trim(isPinned)) {
+        this.evict(key);
+      }
+      if (lru.size === 0) {
+        this.windows.delete(window);
+      }
     }
-    for (const key of this.total.trim(isPinned)) this.evict(key);
+    for (const key of this.total.trim(isPinned)) {
+      this.evict(key);
+    }
   }
 
   private evict(key: string): void {
@@ -152,7 +191,9 @@ export class PieceCache {
     if (window) {
       const lru = this.windows.get(window);
       lru?.delete(key);
-      if (lru?.size === 0) this.windows.delete(window);
+      if (lru?.size === 0) {
+        this.windows.delete(window);
+      }
     }
     this.windowOf.delete(key);
     this.total.delete(key);
@@ -213,11 +254,15 @@ export class SlidingPieceStore {
   }
 
   put(index: number, buf: Uint8Array, cb: Callback = () => {}): void {
-    if (this.closed) return cb(new Error('Piece store is closed'));
+    if (this.closed) {
+      return cb(new Error('Piece store is closed'));
+    }
 
     writeFile(this.piecePath(index), buf).then(
       () => {
-        if (this.closed) return cb(new Error('Piece store is closed'));
+        if (this.closed) {
+          return cb(new Error('Piece store is closed'));
+        }
         this.present.set(index, buf.length);
         this.cache.added(this, index, buf.length);
         cb(null);
@@ -231,7 +276,9 @@ export class SlidingPieceStore {
     opts: GetOptions | null | undefined | Callback<Buffer>,
     cb?: Callback<Buffer>,
   ): void {
-    if (typeof opts === 'function') return this.get(index, null, opts);
+    if (typeof opts === 'function') {
+      return this.get(index, null, opts);
+    }
     const callback = cb ?? (() => {});
 
     const size = this.present.get(index);
@@ -253,7 +300,9 @@ export class SlidingPieceStore {
   }
 
   destroy(cb: Callback = () => {}): void {
-    if (this.closed) return cb(null);
+    if (this.closed) {
+      return cb(null);
+    }
     this.closed = true;
     this.cache.removed(this, this.present.keys());
     this.present.clear();
@@ -265,7 +314,9 @@ export class SlidingPieceStore {
 
   /** Drops a piece to free space; WebTorrent will fetch it again if it's read later. */
   evict(index: number): void {
-    if (!this.present.delete(index)) return;
+    if (!this.present.delete(index)) {
+      return;
+    }
     if (!this.torrent.destroyed) {
       this.torrent._markUnverified(index);
       // Retract the piece (BEP 54). Without this, peers keep believing we have

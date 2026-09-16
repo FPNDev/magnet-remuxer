@@ -40,7 +40,9 @@ export class LocalFileSource implements ByteSource {
   ) {}
 
   stream(start: number, end: number): Readable {
-    if (end <= start) return Readable.from([]);
+    if (end <= start) {
+      return Readable.from([]);
+    }
     return createReadStream(this.path, { start, end: end - 1 });
   }
 }

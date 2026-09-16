@@ -137,7 +137,9 @@ export class Remuxer {
         });
         const result = await this.run(target, slice, args, collector);
         if (!isComplete(target.index, slice, result)) {
-          if (canRetry) continue;
+          if (canRetry) {
+            continue;
+          }
           throw boundaryError(n);
         }
         await writeFileAtomic(outPath, toHlsWebVtt(Buffer.concat(chunks)));
@@ -151,7 +153,9 @@ export class Remuxer {
         const result = await this.run(target, slice, args, splitter);
         await writing;
         if (!isComplete(target.index, slice, result)) {
-          if (canRetry) continue;
+          if (canRetry) {
+            continue;
+          }
           throw boundaryError(n);
         }
         await rename(temp, outPath);
@@ -253,7 +257,9 @@ function aacPlan(index: MediaIndex, rendition: AudioRendition, n: number): Plan 
   );
 
   const filters: string[] = [];
-  if (rendition.track.sampleRate !== rate) filters.push(`aresample=${rate}`);
+  if (rendition.track.sampleRate !== rate) {
+    filters.push(`aresample=${rate}`);
+  }
   filters.push(
     `atrim=start_pts=${encodeFrom}` + (encodeTo === null ? '' : `:end_pts=${encodeTo}`),
   );
@@ -281,7 +287,9 @@ function aacPlan(index: MediaIndex, rendition: AudioRendition, n: number): Plan 
 }
 
 function isComplete(index: MediaIndex, slice: SliceTarget, result: SliceResult): boolean {
-  if (!result.started) return false;
+  if (!result.started) {
+    return false;
+  }
   const { range } = slice;
 
   if (range.mode === 'keyframes') {

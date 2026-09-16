@@ -29,7 +29,9 @@ export class TorrentFileSource implements ByteSource {
   }
 
   stream(start: number, end: number): Readable {
-    if (end <= start) return Readable.from([]);
+    if (end <= start) {
+      return Readable.from([]);
+    }
 
     const { pieceLength, infoHash } = this.torrent;
     const first = Math.floor((this.file.offset + start) / pieceLength);

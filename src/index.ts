@@ -50,6 +50,8 @@ async function main(): Promise<void> {
     remuxer: new Remuxer({ ffmpegPath: config.ffmpegPath, timeoutMs: config.jobTimeoutMs }),
     segmentDuration: config.segmentDuration,
     prefetchSegments: config.prefetchSegments,
+    prefetchAheadBytes: config.prefetchAheadBytes,
+    requestTimeoutMs: config.requestTimeoutMs,
     readStallMs: config.readStallMs,
   });
 
@@ -65,13 +67,17 @@ async function main(): Promise<void> {
   });
 
   const server = app.listen(config.port, (error?: Error) => {
-    if (error) throw error;
+    if (error) {
+      throw error;
+    }
     logger.info(`Listening on http://localhost:${config.port}`, { cacheDir: config.cacheDir });
   });
 
   let closing = false;
   const shutdown = (signal: string) => {
-    if (closing) return;
+    if (closing) {
+      return;
+    }
     closing = true;
     logger.info('Shutting down', { signal });
     server.close();

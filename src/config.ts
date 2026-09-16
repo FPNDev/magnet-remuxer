@@ -6,7 +6,9 @@ const MiB = 1024 * 1024;
 
 function number(name: string, fallback: number): number {
   const raw = env[name];
-  if (raw === undefined || raw === '') return fallback;
+  if (raw === undefined || raw === '') {
+    return fallback;
+  }
 
   const value = Number(raw);
   if (!Number.isFinite(value) || value < 0) {
@@ -31,6 +33,13 @@ export const config = {
   segmentDuration: number('SEGMENT_DURATION', 6),
   /** Segments rendered ahead of the one a player just requested. */
   prefetchSegments: number('PREFETCH_SEGMENTS', 3),
+  /**
+   * Cap on how much a file may prefetch, in bytes read. Segments of a 4K remux
+   * are tens of MB, so prefetching by count alone would flood the swarm.
+   */
+  prefetchAheadBytes: number('PREFETCH_AHEAD_MB', 96) * MiB,
+  /** A request waiting longer than this for its segment fails instead of hanging. */
+  requestTimeoutMs: number('REQUEST_TIMEOUT_S', 120) * 1000,
   maxConcurrentJobs: number('MAX_CONCURRENT_JOBS', Math.max(4, os.availableParallelism())),
   jobTimeoutMs: number('JOB_TIMEOUT_S', 180) * 1000,
   /** A torrent read that receives nothing for this long fails instead of hanging. */

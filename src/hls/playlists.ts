@@ -58,7 +58,9 @@ export function mediaPlaylist(index: MediaIndex, rendition: Rendition): string {
     '#EXT-X-PLAYLIST-TYPE:VOD',
     '#EXT-X-INDEPENDENT-SEGMENTS',
   ];
-  if (rendition.type !== 'subtitle') lines.push('#EXT-X-MAP:URI="init.mp4"');
+  if (rendition.type !== 'subtitle') {
+    lines.push('#EXT-X-MAP:URI="init.mp4"');
+  }
   durations.forEach((duration, n) => {
     lines.push(`#EXTINF:${duration.toFixed(3)},`, segmentFileName(rendition, n));
   });
@@ -156,7 +158,9 @@ function optionalQuoted(value: string | undefined): string | undefined {
 }
 
 function bcp47(language: string): string | undefined {
-  if (!language || language === 'und') return undefined;
+  if (!language || language === 'und') {
+    return undefined;
+  }
   return ISO_639_1[language.toLowerCase()] ?? language;
 }
 
@@ -172,7 +176,9 @@ function uniqueLabel(track: MkvTrack, used: Set<string>): string {
   }
   label ||= `Track ${track.number}`;
 
-  if (used.has(label)) label = `${label} (${track.number})`;
+  if (used.has(label)) {
+    label = `${label} (${track.number})`;
+  }
   used.add(label);
   return label;
 }

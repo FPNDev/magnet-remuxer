@@ -60,14 +60,18 @@ export async function buildMediaIndex(
   const layout = await readMatroskaLayout(source);
 
   const video = layout.tracks.find((track) => track.kind === 'video');
-  if (!video) throw new MatroskaError('File has no video track');
+  if (!video) {
+    throw new MatroskaError('File has no video track');
+  }
 
   const keyframes: Keyframe[] = [];
   const cues = layout.cues
     .filter((cue) => cue.track === video.number)
     .sort((a, b) => a.time - b.time);
   for (const cue of cues) {
-    if (keyframes.at(-1)?.ts === cue.time) continue;
+    if (keyframes.at(-1)?.ts === cue.time) {
+      continue;
+    }
     keyframes.push({
       ts: cue.time,
       cluster: cue.clusterPosition,
@@ -82,7 +86,9 @@ export async function buildMediaIndex(
   const lastKeyframe = toSeconds(keyframes.at(-1)!.ts);
   let duration =
     layout.durationTicks === undefined ? 0 : toSeconds(layout.durationTicks);
-  if (!(duration > lastKeyframe)) duration = lastKeyframe + targetDuration;
+  if (!(duration > lastKeyframe)) {
+    duration = lastKeyframe + targetDuration;
+  }
 
   return {
     version: MEDIA_INDEX_VERSION,
@@ -121,7 +127,9 @@ export function planSegments(
 
   for (let k = 1; k < keyframeTimes.length; k++) {
     const length = keyframeTimes[k]! - segmentStart;
-    if (length < target) continue;
+    if (length < target) {
+      continue;
+    }
 
     // Cutting one keyframe earlier may land closer to the target.
     const prev = k - 1;
@@ -133,7 +141,9 @@ export function planSegments(
         ? prev
         : k;
 
-    if (duration - keyframeTimes[pick]! < MIN_TAIL_SECONDS) break;
+    if (duration - keyframeTimes[pick]! < MIN_TAIL_SECONDS) {
+      break;
+    }
     starts.push(pick);
     segmentStart = keyframeTimes[pick]!;
     k = pick;
@@ -168,7 +178,9 @@ export function segmentEnd(index: MediaIndex, n: number): number {
 function segmentKeyframe(index: MediaIndex, n: number): Keyframe {
   const k = index.segmentStarts[n];
   const keyframe = k === undefined ? undefined : index.keyframes[k];
-  if (!keyframe) throw new RangeError(`Segment ${n} is out of range`);
+  if (!keyframe) {
+    throw new RangeError(`Segment ${n} is out of range`);
+  }
   return keyframe;
 }
 
@@ -232,7 +244,9 @@ function nextClusterAfter(index: MediaIndex, k: number): number {
   const cluster = index.keyframes[k]!.cluster;
   for (let i = k + 1; i < index.keyframes.length; i++) {
     const next = index.keyframes[i]!.cluster;
-    if (next > cluster) return Math.min(index.mediaEnd, next);
+    if (next > cluster) {
+      return Math.min(index.mediaEnd, next);
+    }
   }
   return index.mediaEnd;
 }

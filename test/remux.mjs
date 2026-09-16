@@ -59,7 +59,9 @@ for (const rendition of [renditions.video, ...renditions.audio, ...renditions.su
   const isSubtitle = rendition.type === 'subtitle';
   const started = Date.now();
 
-  if (!isSubtitle) await remuxer.writeInit(index, rendition, path.join(dir, 'init.mp4'));
+  if (!isSubtitle) {
+    await remuxer.writeInit(index, rendition, path.join(dir, 'init.mp4'));
+  }
   for (let n = 0; n < count; n++) {
     await remuxer.writeSegment(
       { index, source, rendition },
@@ -97,7 +99,9 @@ for (const rendition of [renditions.video, ...renditions.audio, ...renditions.su
   const produced = await packets(full);
   let regressions = 0;
   for (let i = 1; i < produced.length; i++) {
-    if (produced[i][1] <= produced[i - 1][1]) regressions++;
+    if (produced[i][1] <= produced[i - 1][1]) {
+      regressions++;
+    }
   }
 
   check(
@@ -109,7 +113,9 @@ for (const rendition of [renditions.video, ...renditions.audio, ...renditions.su
   if (rendition.transcode) {
     let gaps = 0;
     for (let i = 1; i < produced.length; i++) {
-      if (produced[i][0] - produced[i - 1][0] !== 1024) gaps++;
+      if (produced[i][0] - produced[i - 1][0] !== 1024) {
+        gaps++;
+      }
     }
     check(
       gaps === 0 && regressions === 0,

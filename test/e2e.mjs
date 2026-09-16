@@ -45,7 +45,9 @@ const parseMaster = (text, base) => ({
 });
 
 const parseMedia = (text, base) => {
-  if (!text.startsWith('#EXTM3U')) throw new Error(`not a playlist: ${text.slice(0, 200)}`);
+  if (!text.startsWith('#EXTM3U')) {
+    throw new Error(`not a playlist: ${text.slice(0, 200)}`);
+  }
   const lines = text.trim().split('\n');
   const init = /#EXT-X-MAP:URI="([^"]*)"/.exec(text)?.[1];
   return {
@@ -64,8 +66,12 @@ async function verifyConcat(label, parts, { expectedPackets, contiguousAac = fal
   let regressions = 0;
   let gaps = 0;
   for (let i = 1; i < produced.length; i++) {
-    if (produced[i][1] <= produced[i - 1][1]) regressions++;
-    if (contiguousAac && produced[i][0] - produced[i - 1][0] !== 1024) gaps++;
+    if (produced[i][1] <= produced[i - 1][1]) {
+      regressions++;
+    }
+    if (contiguousAac && produced[i][0] - produced[i - 1][0] !== 1024) {
+      gaps++;
+    }
   }
   const countOk = expectedPackets === undefined || produced.length === expectedPackets;
   check(

@@ -27,7 +27,9 @@ export function section(title) {
 }
 
 export function check(ok, label, detail = '') {
-  if (!ok) failures++;
+  if (!ok) {
+    failures++;
+  }
   console.log(`${ok ? 'PASS' : 'FAIL'} ${label}${detail ? ` - ${detail}` : ''}`);
   return ok;
 }
@@ -70,8 +72,12 @@ export function boxes(buf, start = 0, end = buf.length) {
   for (let pos = start; pos + 8 <= end; ) {
     let size = buf.readUInt32BE(pos);
     const type = buf.toString('latin1', pos + 4, pos + 8);
-    if (size === 1) size = Number(buf.readBigUInt64BE(pos + 8));
-    if (size === 0) size = end - pos;
+    if (size === 1) {
+      size = Number(buf.readBigUInt64BE(pos + 8));
+    }
+    if (size === 0) {
+      size = end - pos;
+    }
     found.push({ type, start: pos, size });
     pos += size;
   }
@@ -114,7 +120,9 @@ export async function seedFixture(file, options = {}) {
   // No DHT, trackers or local discovery: the magnet carries the peer address.
   const client = new WebTorrent({ dht: false, tracker: false, lsd: false, ...options });
   const torrent = await new Promise((resolve) => client.seed(file, { announce: [] }, resolve));
-  if (!client.listening) await new Promise((resolve) => client.once('listening', resolve));
+  if (!client.listening) {
+    await new Promise((resolve) => client.once('listening', resolve));
+  }
   return { client, torrent, magnet: `${torrent.magnetURI}&x.pe=127.0.0.1:${client.address().port}` };
 }
 
@@ -138,7 +146,9 @@ export function startServer({ name, port, cacheDir, env = {} }) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`server ${name} did not start`)), 30000);
     child.stdout.on('data', (data) => {
-      if (!data.toString().includes('Listening on')) return;
+      if (!data.toString().includes('Listening on')) {
+        return;
+      }
       clearTimeout(timer);
       resolve({
         base: `http://127.0.0.1:${port}`,

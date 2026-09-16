@@ -6,12 +6,17 @@ const threshold = LEVELS[process.env.LOG_LEVEL as Level] ?? LEVELS.info;
 type Fields = Record<string, unknown>;
 
 function write(level: Level, message: string, fields?: Fields): void {
-  if (LEVELS[level] < threshold) return;
+  if (LEVELS[level] < threshold) {
+    return;
+  }
 
   const line = `${new Date().toISOString()} ${level.toUpperCase().padEnd(5)} ${message}`;
   const output = fields ? `${line} ${JSON.stringify(fields)}` : line;
-  if (level === 'warn' || level === 'error') console.error(output);
-  else console.log(output);
+  if (level === 'warn' || level === 'error') {
+    console.error(output);
+  } else {
+    console.log(output);
+  }
 }
 
 export const logger = {

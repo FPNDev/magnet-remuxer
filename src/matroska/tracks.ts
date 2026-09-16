@@ -43,9 +43,13 @@ const TRACK_KINDS: Record<number, TrackKind> = {
 export function parseTracks(buf: Uint8Array, tracks: EbmlElement): MkvTrack[] {
   const result: MkvTrack[] = [];
   for (const el of childElements(buf, tracks.dataStart, tracks.dataEnd)) {
-    if (el.id !== Id.TrackEntry) continue;
+    if (el.id !== Id.TrackEntry) {
+      continue;
+    }
     const track = parseTrackEntry(buf, el);
-    if (track) result.push(track);
+    if (track) {
+      result.push(track);
+    }
   }
   return result;
 }
@@ -108,25 +112,37 @@ function parseTrackEntry(buf: Uint8Array, entry: EbmlElement): MkvTrack | null {
         break;
       case Id.Video:
         for (const v of childElements(buf, el.dataStart, el.dataEnd)) {
-          if (v.id === Id.PixelWidth) track.width = readUint(buf, v);
-          if (v.id === Id.PixelHeight) track.height = readUint(buf, v);
+          if (v.id === Id.PixelWidth) {
+            track.width = readUint(buf, v);
+          }
+          if (v.id === Id.PixelHeight) {
+            track.height = readUint(buf, v);
+          }
         }
         break;
       case Id.Audio:
         track.sampleRate = 8000;
         track.channels = 1;
         for (const a of childElements(buf, el.dataStart, el.dataEnd)) {
-          if (a.id === Id.SamplingFrequency) track.sampleRate = readFloat(buf, a);
-          if (a.id === Id.Channels) track.channels = readUint(buf, a);
+          if (a.id === Id.SamplingFrequency) {
+            track.sampleRate = readFloat(buf, a);
+          }
+          if (a.id === Id.Channels) {
+            track.channels = readUint(buf, a);
+          }
         }
         break;
     }
   }
 
   const kind = TRACK_KINDS[type];
-  if (!kind || !track.number || !track.codecId) return null;
+  if (!kind || !track.number || !track.codecId) {
+    return null;
+  }
 
   track.kind = kind;
-  if (bcp47) track.language = bcp47;
+  if (bcp47) {
+    track.language = bcp47;
+  }
   return track;
 }

@@ -69,7 +69,9 @@ function magnetFromQuery(req: Request): string {
   const query = req.originalUrl.slice(req.originalUrl.indexOf('?') + 1);
   const parts = query.split('&');
   const index = parts.findIndex((part) => part.startsWith('magnet='));
-  if (index === -1) throw new HttpError(400, 'Missing "magnet" query parameter');
+  if (index === -1) {
+    throw new HttpError(400, 'Missing "magnet" query parameter');
+  }
 
   let magnet: string;
   try {
@@ -77,7 +79,9 @@ function magnetFromQuery(req: Request): string {
   } catch {
     throw new HttpError(400, 'Invalid magnet link');
   }
-  if (magnet.includes('&')) return magnet; // the client encoded the whole link
+  if (magnet.includes('&')) {
+    return magnet;
+  } // the client encoded the whole link
 
   // A raw link: its own parameters were split off as top-level ones.
   const extras = parts.slice(index + 1).filter((part) => !part.startsWith('file='));
@@ -91,7 +95,9 @@ function sendFile(res: Response, file: ServedFile): Promise<void> {
     res.sendFile(file.path, { dotfiles: 'allow', cacheControl: false }, (err) => {
       // Once headers are out, failures are client disconnects.
       if (err && !res.headersSent) reject(err);
-      else resolve();
+      else {
+        resolve();
+      }
     });
   });
 }

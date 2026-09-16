@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fixturesDir } from './lib.mjs';
 
 const suites = [
+  ['queue.mjs', []],
   ['make-fixtures.mjs', []],
   ['remux.mjs', [path.join(fixturesDir, 'movie.mkv'), '6']],
   ['remux.mjs', [path.join(fixturesDir, 'tiny.mkv'), '2']],

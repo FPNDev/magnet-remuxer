@@ -4,7 +4,9 @@ export class SingleFlight {
 
   run<T>(key: string, task: () => Promise<T>): Promise<T> {
     const existing = this.pending.get(key);
-    if (existing) return existing as Promise<T>;
+    if (existing) {
+      return existing as Promise<T>;
+    }
 
     const promise = Promise.resolve()
       .then(task)

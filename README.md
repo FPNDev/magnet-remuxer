@@ -93,6 +93,8 @@ All optional; defaults in `src/config.ts`.
 | `SEGMENT_CACHE_MB` | `10240` | Disk budget for rendered segments. |
 | `SEGMENT_DURATION` | `6` | Target segment length in seconds. |
 | `PREFETCH_SEGMENTS` | `3` | Segments rendered ahead of the player. |
+| `PREFETCH_AHEAD_MB` | `96` | Cap on prefetch by bytes read; segments of a big 4K remux might be tens of MB each. |
+| `REQUEST_TIMEOUT_S` | `120` | A request waiting longer than this fails with 504. |
 | `MAX_CONCURRENT_JOBS` | `max(4, cpus)` | Concurrent ffmpeg jobs. |
 | `JOB_TIMEOUT_S` | `180` | Hard limit for one segment job. |
 | `READ_STALL_S` | `45` | Fail a torrent read that receives nothing for this long. |

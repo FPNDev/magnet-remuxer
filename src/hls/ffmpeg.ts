@@ -29,7 +29,9 @@ const BROKEN_PIPE_CODES = new Set(['EPIPE', 'EOF', 'ERR_STREAM_PREMATURE_CLOSE']
 const running = new Set<ChildProcess>();
 
 export function killAllFfmpeg(): void {
-  for (const child of running) child.kill('SIGKILL');
+  for (const child of running) {
+    child.kill('SIGKILL');
+  }
 }
 
 /**
@@ -85,7 +87,9 @@ export async function runFfmpeg(
   // pipe just means ffmpeg stopped reading; its exit code tells the real story.
   if (run.input) {
     pipeline(run.input, child.stdin!).catch((err: NodeJS.ErrnoException) => {
-      if (!BROKEN_PIPE_CODES.has(err.code ?? '')) kill(err);
+      if (!BROKEN_PIPE_CODES.has(err.code ?? '')) {
+        kill(err);
+      }
     });
   }
   const writing = run.output
@@ -94,7 +98,9 @@ export async function runFfmpeg(
 
   try {
     const [code] = await Promise.all([exited, writing]);
-    if (failure) throw failure;
+    if (failure) {
+      throw failure;
+    }
     if (code !== 0) {
       throw new FfmpegError(`ffmpeg exited with code ${code}`, stderr);
     }

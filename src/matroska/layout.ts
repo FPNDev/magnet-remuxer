@@ -66,14 +66,18 @@ class CachedReader {
 
   async header(pos: number): Promise<ElementHeader> {
     const header = readElementHeader(await this.read(pos, pos + 12), 0);
-    if (!header) throw new MatroskaError(`Truncated element at byte ${pos}`);
+    if (!header) {
+      throw new MatroskaError(`Truncated element at byte ${pos}`);
+    }
     return header;
   }
 
   /** Reads a whole sized element; undefined if its ID isn't `expectedId`. */
   async element(pos: number, expectedId?: number): Promise<RawElement | undefined> {
     const header = await this.header(pos);
-    if (expectedId !== undefined && header.id !== expectedId) return undefined;
+    if (expectedId !== undefined && header.id !== expectedId) {
+      return undefined;
+    }
     if (header.size === UNKNOWN_SIZE) {
       throw new MatroskaError(`Unsized element at byte ${pos}`);
     }
@@ -95,11 +99,15 @@ export async function readMatroskaLayout(
   const reader = new CachedReader(source);
 
   const ebml = await reader.element(0, Id.EBML);
-  if (!ebml) throw new MatroskaError('Not a Matroska file');
+  if (!ebml) {
+    throw new MatroskaError('Not a Matroska file');
+  }
 
   let docType = 'matroska';
   for (const el of childElements(ebml.data, ebml.header.headerLength)) {
-    if (el.id === Id.DocType) docType = readString(ebml.data, el);
+    if (el.id === Id.DocType) {
+      docType = readString(ebml.data, el);
+    }
   }
   if (docType !== 'matroska' && docType !== 'webm') {
     throw new MatroskaError(`Unsupported DocType "${docType}"`);
@@ -124,18 +132,28 @@ export async function readMatroskaLayout(
   const seeks = new Map<number, number[]>();
   const loadedSeekHeads = new Set<number>();
   const loadSeekHead = async (at: number) => {
-    if (loadedSeekHeads.has(at)) return;
+    if (loadedSeekHeads.has(at)) {
+      return;
+    }
     loadedSeekHeads.add(at);
 
     const head = await reader.element(at, Id.SeekHead);
-    if (!head) return;
+    if (!head) {
+      return;
+    }
     for (const seek of childElements(head.data, head.header.headerLength)) {
-      if (seek.id !== Id.Seek) continue;
+      if (seek.id !== Id.Seek) {
+        continue;
+      }
       let id: number | undefined;
       let position: number | undefined;
       for (const el of childElements(head.data, seek.dataStart, seek.dataEnd)) {
-        if (el.id === Id.SeekID) id = readUint(head.data, el);
-        if (el.id === Id.SeekPosition) position = readUint(head.data, el);
+        if (el.id === Id.SeekID) {
+          id = readUint(head.data, el);
+        }
+        if (el.id === Id.SeekPosition) {
+          position = readUint(head.data, el);
+        }
       }
       if (id !== undefined && position !== undefined) {
         seeks.set(id, [...(seeks.get(id) ?? []), segmentStart + position]);
@@ -160,10 +178,15 @@ export async function readMatroskaLayout(
       throw new MatroskaError(`Unsized top-level element at byte ${pos}`);
     }
 
-    if (header.id === Id.SeekHead) await loadSeekHead(pos);
-    else if (header.id === Id.Info) info = await reader.element(pos);
-    else if (header.id === Id.Tracks) tracks = await reader.element(pos);
-    else if (header.id === Id.Cues) cues = await reader.element(pos);
+    if (header.id === Id.SeekHead) {
+      await loadSeekHead(pos);
+    } else if (header.id === Id.Info) {
+      info = await reader.element(pos);
+    } else if (header.id === Id.Tracks) {
+      tracks = await reader.element(pos);
+    } else if (header.id === Id.Cues) {
+      cues = await reader.element(pos);
+    }
 
     pos += header.headerLength + header.size;
   }
@@ -179,7 +202,9 @@ export async function readMatroskaLayout(
   const bySeek = async (id: number) => {
     for (const at of seeks.get(id) ?? []) {
       const element = await reader.element(at, id);
-      if (element) return element;
+      if (element) {
+        return element;
+      }
     }
     return undefined;
   };
@@ -187,8 +212,12 @@ export async function readMatroskaLayout(
   tracks ??= await bySeek(Id.Tracks);
   cues ??= await bySeek(Id.Cues);
 
-  if (!info) throw new MatroskaError('Info element not found');
-  if (!tracks) throw new MatroskaError('Tracks element not found');
+  if (!info) {
+    throw new MatroskaError('Info element not found');
+  }
+  if (!tracks) {
+    throw new MatroskaError('Tracks element not found');
+  }
   if (!cues) {
     throw new MatroskaError(
       'File has no Cues index, so it cannot be streamed without a full download',
@@ -198,14 +227,20 @@ export async function readMatroskaLayout(
   let timestampScale = 1_000_000;
   let durationTicks: number | undefined;
   for (const el of childElements(info.data, info.header.headerLength)) {
-    if (el.id === Id.TimestampScale) timestampScale = readUint(info.data, el);
-    if (el.id === Id.Duration) durationTicks = readFloat(info.data, el);
+    if (el.id === Id.TimestampScale) {
+      timestampScale = readUint(info.data, el);
+    }
+    if (el.id === Id.Duration) {
+      durationTicks = readFloat(info.data, el);
+    }
   }
 
   let mediaEnd = segmentEnd;
   for (const id of [Id.Cues, Id.Tags, Id.Attachments, Id.Chapters, Id.SeekHead]) {
     for (const at of seeks.get(id) ?? []) {
-      if (at > firstCluster && at < mediaEnd) mediaEnd = at;
+      if (at > firstCluster && at < mediaEnd) {
+        mediaEnd = at;
+      }
     }
   }
 

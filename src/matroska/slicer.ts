@@ -113,9 +113,13 @@ async function* generate(
     while (await input.fill(1)) {
       await input.fill(12);
       const element = readElementHeader(input.peek(12), 0);
-      if (!element) break;
+      if (!element) {
+        break;
+      }
 
-      if (inCluster && input.position >= clusterEnd) inCluster = false;
+      if (inCluster && input.position >= clusterEnd) {
+        inCluster = false;
+      }
 
       if (element.id === Id.Cluster) {
         input.take(element.headerLength);
@@ -137,12 +141,16 @@ async function* generate(
         element.id === Id.SimpleBlock || element.id === Id.BlockGroup;
 
       if (!inCluster || (!isBlock && element.id !== Id.Timestamp)) {
-        if (!(await input.skip(total))) break;
+        if (!(await input.skip(total))) {
+          break;
+        }
         continue;
       }
 
       if (element.id === Id.Timestamp) {
-        if (!(await input.fill(total))) break;
+        if (!(await input.fill(total))) {
+          break;
+        }
         clusterTs = readUintBytes(input.take(total), element.headerLength);
         continue;
       }
@@ -155,12 +163,18 @@ async function* generate(
       }
 
       const peekLength = Math.min(total, BLOCK_PEEK);
-      if (!(await input.fill(peekLength))) break;
+      if (!(await input.fill(peekLength))) {
+        break;
+      }
       let block = parseBlockHeader(input.peek(peekLength), element);
       if (!block) {
-        if (!(await input.fill(total))) break;
+        if (!(await input.fill(total))) {
+          break;
+        }
         block = parseBlockHeader(input.peek(total), element);
-        if (!block) throw new MatroskaError('Malformed block header');
+        if (!block) {
+          throw new MatroskaError('Malformed block header');
+        }
       }
       const ts = clusterTs + block.relativeTs;
 
@@ -184,10 +198,14 @@ async function* generate(
       }
 
       if (!emit) {
-        if (!(await input.skip(total))) break;
+        if (!(await input.skip(total))) {
+          break;
+        }
         continue;
       }
-      if (!(await input.fill(total))) break;
+      if (!(await input.fill(total))) {
+        break;
+      }
 
       if (!clusterOpened) {
         clusterOpened = true;
@@ -213,7 +231,9 @@ async function* generate(
 
 function readUintBytes(buf: Buffer, start: number): number {
   let value = 0;
-  for (let i = start; i < buf.length; i++) value = value * 256 + buf[i]!;
+  for (let i = start; i < buf.length; i++) {
+    value = value * 256 + buf[i]!;
+  }
   return value;
 }
 
@@ -230,7 +250,9 @@ function parseBlockHeader(
     pos = -1;
     while (cursor < end && cursor < buf.length) {
       const child = readElementHeader(buf, cursor);
-      if (!child) return null;
+      if (!child) {
+        return null;
+      }
       if (child.size === UNKNOWN_SIZE) {
         throw new MatroskaError('Unsized element inside BlockGroup');
       }
@@ -241,14 +263,20 @@ function parseBlockHeader(
       cursor += child.headerLength + child.size;
     }
     if (pos === -1) {
-      if (cursor >= end) throw new MatroskaError('BlockGroup without a Block');
+      if (cursor >= end) {
+        throw new MatroskaError('BlockGroup without a Block');
+      }
       return null;
     }
   }
 
-  if (pos >= buf.length) return null;
+  if (pos >= buf.length) {
+    return null;
+  }
   const trackLength = vintLength(buf[pos]!);
-  if (pos + trackLength + 2 > buf.length) return null;
+  if (pos + trackLength + 2 > buf.length) {
+    return null;
+  }
 
   return {
     track: readVint(buf, pos).value,
@@ -272,14 +300,18 @@ class ByteQueue {
   /** Buffers at least `n` bytes; false if the source ends first. */
   async fill(n: number): Promise<boolean> {
     while (this.length < n) {
-      if (this.ended) return false;
+      if (this.ended) {
+        return false;
+      }
       const next = await this.source.next();
       if (next.done) {
         this.ended = true;
         return false;
       }
       const chunk = asBuffer(next.value);
-      if (chunk.length === 0) continue;
+      if (chunk.length === 0) {
+        continue;
+      }
       this.chunks.push(chunk);
       this.length += chunk.length;
     }
@@ -302,7 +334,9 @@ class ByteQueue {
   async skip(n: number): Promise<boolean> {
     let rest = n;
     while (rest > 0) {
-      if (this.length === 0 && !(await this.fill(1))) return false;
+      if (this.length === 0 && !(await this.fill(1))) {
+        return false;
+      }
       const step = Math.min(rest, this.length);
       this.consume(step);
       rest -= step;
@@ -312,7 +346,9 @@ class ByteQueue {
 
   private copy(n: number): Buffer {
     const first = this.chunks[0];
-    if (!first || n === 0) return Buffer.alloc(0);
+    if (!first || n === 0) {
+      return Buffer.alloc(0);
+    }
     if (first.length - this.head >= n) {
       return first.subarray(this.head, this.head + n);
     }

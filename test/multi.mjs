@@ -36,7 +36,9 @@ async function openAsset(base, magnet, label, fileIndex) {
   // `file` is a query parameter, so it must sit outside the encoded magnet.
   const url = `${base}/m3u8?magnet=${encodeURIComponent(magnet)}${fileIndex === undefined ? '' : `&file=${fileIndex}`}`;
   const master = await get(url, false);
-  if (master.status !== 200) throw new Error(`${label}: master failed (${master.status}) ${master.body}`);
+  if (master.status !== 200) {
+    throw new Error(`${label}: master failed (${master.status}) ${master.body}`);
+  }
 
   const urls = parseMaster(master.body, `${base}/m3u8`);
   const video = parseMedia((await get(urls.video, false)).body, urls.video);
@@ -51,7 +53,9 @@ async function play(asset) {
   const times = [];
   for (const url of [asset.video.init, asset.audio?.init].filter(Boolean)) {
     const res = await get(url);
-    if (res.status !== 200) failures.push(`${url} → ${res.status} ${res.body}`);
+    if (res.status !== 200) {
+      failures.push(`${url} → ${res.status} ${res.body}`);
+    }
   }
 
   for (let n = 0; n < asset.video.segments.length; n++) {
@@ -59,7 +63,9 @@ async function play(asset) {
     const responses = await Promise.all(urls.map((url) => get(url)));
     responses.forEach((res, i) => {
       times.push(res.ms);
-      if (res.status !== 200) failures.push(`${urls[i]} → ${res.status} ${res.body}`);
+      if (res.status !== 200) {
+        failures.push(`${urls[i]} → ${res.status} ${res.body}`);
+      }
     });
   }
   return { failures, times };

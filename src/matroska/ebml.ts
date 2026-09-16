@@ -38,7 +38,9 @@ export function readElementHeader(
   buf: Uint8Array,
   pos: number,
 ): ElementHeader | null {
-  if (pos >= buf.length) return null;
+  if (pos >= buf.length) {
+    return null;
+  }
 
   const idLength = vintLength(buf[pos]!);
   if (idLength === 0 || idLength > 4) {
@@ -46,16 +48,22 @@ export function readElementHeader(
   }
 
   const sizePos = pos + idLength;
-  if (sizePos >= buf.length) return null;
+  if (sizePos >= buf.length) {
+    return null;
+  }
 
   const sizeLength = vintLength(buf[sizePos]!);
   if (sizeLength === 0) {
     throw new MatroskaError(`Invalid EBML element size at byte ${sizePos}`);
   }
-  if (sizePos + sizeLength > buf.length) return null;
+  if (sizePos + sizeLength > buf.length) {
+    return null;
+  }
 
   let id = 0;
-  for (let i = 0; i < idLength; i++) id = id * 256 + buf[pos + i]!;
+  for (let i = 0; i < idLength; i++) {
+    id = id * 256 + buf[pos + i]!;
+  }
 
   const mask = 0xff >> sizeLength;
   let size = buf[sizePos]! & mask;
@@ -83,7 +91,9 @@ export function readVint(
   }
 
   let value = buf[pos]! & (0xff >> length);
-  for (let i = 1; i < length; i++) value = value * 256 + buf[pos + i]!;
+  for (let i = 1; i < length; i++) {
+    value = value * 256 + buf[pos + i]!;
+  }
   return { value, length };
 }
 
@@ -119,14 +129,18 @@ export function findChild(
   id: number,
 ): EbmlElement | undefined {
   for (const child of childElements(buf, parent.dataStart, parent.dataEnd)) {
-    if (child.id === id) return child;
+    if (child.id === id) {
+      return child;
+    }
   }
   return undefined;
 }
 
 export function readUint(buf: Uint8Array, el: EbmlElement): number {
   let value = 0;
-  for (let i = el.dataStart; i < el.dataEnd; i++) value = value * 256 + buf[i]!;
+  for (let i = el.dataStart; i < el.dataEnd; i++) {
+    value = value * 256 + buf[i]!;
+  }
   return value;
 }
 

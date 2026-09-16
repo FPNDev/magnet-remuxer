@@ -94,7 +94,9 @@ export function aacSampleRate(track: MkvTrack): number {
 
 /** RFC 6381 codec string for HLS CODECS attributes, when derivable. */
 export function codecString(rendition: Rendition): string | undefined {
-  if (rendition.type === 'subtitle') return 'wvtt';
+  if (rendition.type === 'subtitle') {
+    return 'wvtt';
+  }
 
   const { track } = rendition;
   const priv = track.codecPrivate
@@ -102,14 +104,18 @@ export function codecString(rendition: Rendition): string | undefined {
     : undefined;
 
   if (rendition.type === 'audio') {
-    if (rendition.transcode) return 'mp4a.40.2';
+    if (rendition.transcode) {
+      return 'mp4a.40.2';
+    }
     if (track.codecId.startsWith('A_AAC')) {
       return `mp4a.40.${aacObjectType(track.codecId, priv)}`;
     }
     return OTHER_AUDIO_CODECS[track.codecId];
   }
 
-  if (!priv) return undefined;
+  if (!priv) {
+    return undefined;
+  }
   switch (rendition.codec) {
     case 'avc':
       return avcCodecString(priv);
@@ -135,13 +141,17 @@ function aacObjectType(codecId: string, asc: Buffer | undefined): number {
 
 /** From an avcC record. */
 function avcCodecString(avcC: Buffer): string | undefined {
-  if (avcC.length < 4 || avcC[0] !== 1) return undefined;
+  if (avcC.length < 4 || avcC[0] !== 1) {
+    return undefined;
+  }
   return `avc1.${hex(avcC[1]!)}${hex(avcC[2]!)}${hex(avcC[3]!)}`;
 }
 
 /** From an hvcC record. */
 function hevcCodecString(hvcC: Buffer): string | undefined {
-  if (hvcC.length < 13) return undefined;
+  if (hvcC.length < 13) {
+    return undefined;
+  }
 
   const flags = hvcC[1]!;
   const space = ['', 'A', 'B', 'C'][flags >> 6] ?? '';
@@ -157,7 +167,9 @@ function hevcCodecString(hvcC: Buffer): string | undefined {
   }
 
   const constraints = [...hvcC.subarray(6, 12)];
-  while (constraints.at(-1) === 0) constraints.pop();
+  while (constraints.at(-1) === 0) {
+    constraints.pop();
+  }
 
   return [
     `hvc1.${space}${profile}`,
@@ -169,7 +181,9 @@ function hevcCodecString(hvcC: Buffer): string | undefined {
 
 /** From an av1C record. */
 function av1CodecString(av1C: Buffer): string | undefined {
-  if (av1C.length < 4 || (av1C[0]! & 0x80) === 0) return undefined;
+  if (av1C.length < 4 || (av1C[0]! & 0x80) === 0) {
+    return undefined;
+  }
 
   const profile = av1C[1]! >> 5;
   const level = av1C[1]! & 0x1f;

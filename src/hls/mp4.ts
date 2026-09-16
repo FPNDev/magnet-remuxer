@@ -54,9 +54,13 @@ export class Fmp4Splitter extends Transform {
     this.header = Buffer.concat([this.header, chunk.subarray(offset, offset + taken)]);
     offset += taken;
 
-    if (this.header.length < 8) return offset;
+    if (this.header.length < 8) {
+      return offset;
+    }
     const size32 = this.header.readUInt32BE(0);
-    if (size32 === 1 && this.header.length < 16) return offset;
+    if (size32 === 1 && this.header.length < 16) {
+      return offset;
+    }
 
     const headerLength = size32 === 1 ? 16 : 8;
     const size =
@@ -65,7 +69,9 @@ export class Fmp4Splitter extends Transform {
         : size32 === 0
           ? Infinity
           : size32;
-    if (size < headerLength) throw new Error('Invalid MP4 box size');
+    if (size < headerLength) {
+      throw new Error('Invalid MP4 box size');
+    }
 
     const type = this.header.toString('latin1', 4, 8);
     this.route = INIT_BOXES.has(type)
@@ -80,8 +86,11 @@ export class Fmp4Splitter extends Transform {
   }
 
   private forward(bytes: Buffer): void {
-    if (this.route === 'media') this.push(bytes);
-    else if (this.route === 'init') this.initChunks.push(bytes);
+    if (this.route === 'media') {
+      this.push(bytes);
+    } else if (this.route === 'init') {
+      this.initChunks.push(bytes);
+    }
   }
 }
 
@@ -90,8 +99,12 @@ export function hasTopLevelBox(buf: Buffer, type: string): boolean {
   let pos = 0;
   while (pos + 8 <= buf.length) {
     const size = buf.readUInt32BE(pos);
-    if (buf.toString('latin1', pos + 4, pos + 8) === type) return true;
-    if (size < 8) return false;
+    if (buf.toString('latin1', pos + 4, pos + 8) === type) {
+      return true;
+    }
+    if (size < 8) {
+      return false;
+    }
     pos += size;
   }
   return false;

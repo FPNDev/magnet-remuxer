@@ -59,7 +59,11 @@ const cachedBytes = (file) => {
   const first = Math.floor(file.offset / torrent.pieceLength);
   const last = Math.floor((file.offset + file.length - 1) / torrent.pieceLength);
   let pieces = 0;
-  for (let i = first; i <= last; i++) if (torrent.bitfield.get(i)) pieces++;
+  for (let i = first; i <= last; i++) {
+    if (torrent.bitfield.get(i)) {
+      pieces++;
+    }
+  }
   return pieces * torrent.pieceLength;
 };
 
