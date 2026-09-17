@@ -200,13 +200,22 @@ export async function seedFixture(file, options = {}) {
 const servers = new Set();
 process.on('exit', () => servers.forEach((child) => child.kill()));
 
-/** Starts the compiled server, resolving once it is listening. */
-export function startServer({ name, port, cacheDir, env = {} }) {
+/**
+ * Starts the compiled server, resolving once it is listening. `entry` picks
+ * another build to compare against.
+ */
+export function startServer({
+  name,
+  port,
+  cacheDir,
+  env = {},
+  entry = 'dist/index.js',
+}) {
   mkdirSync(path.join(workDir, 'logs'), { recursive: true });
   const log = createWriteStream(path.join(workDir, 'logs', `${name}.log`), {
     flags: 'a',
   });
-  const child = spawn(process.execPath, ['dist/index.js'], {
+  const child = spawn(process.execPath, [entry], {
     cwd: root,
     env: {
       ...process.env,

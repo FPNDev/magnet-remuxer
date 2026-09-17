@@ -47,6 +47,12 @@ export interface SliceResult {
    * reading it stopped - an encoder that has filled its window, say.
    */
   sourceEnded: boolean;
+  /**
+   * Timestamp of the first block of the track in the input, kept or not. Blocks
+   * of one track are stored in timestamp order, so if this is no later than a
+   * range's start, nothing the range needs lies before where reading began.
+   */
+  firstTrackTs: number | null;
 }
 
 /** Bytes of a block element needed to read its track number and timestamp. */
@@ -87,6 +93,7 @@ export function sliceMatroska(
     started: false,
     reachedEnd: false,
     sourceEnded: false,
+    firstTrackTs: null,
   };
   return { result, stream: generate(source, options, result) };
 }
@@ -181,6 +188,9 @@ async function* generate(
         }
       }
       const ts = clusterTs + block.relativeTs;
+      if (block.track === track && result.firstTrackTs === null) {
+        result.firstTrackTs = ts;
+      }
 
       let emit: boolean;
       if (range.mode === 'keyframes') {

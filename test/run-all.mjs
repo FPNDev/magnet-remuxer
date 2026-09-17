@@ -11,9 +11,12 @@ const suites = [
   ['remux.mjs', [path.join(fixturesDir, 'tiny.mkv'), '2']],
   ['remux.mjs', [path.join(fixturesDir, 'sparse.mkv'), '4']],
   ['remux.mjs', [path.join(fixturesDir, 'codecs.mkv'), '4']],
+  ['remux.mjs', [path.join(fixturesDir, 'movie.mkv'), '2']],
+  ['audio-window.mjs', []],
   ['piece-cache.mjs', []],
   ['e2e.mjs', []],
   ['multi.mjs', []],
+  ['concurrency.mjs', []],
 ];
 
 let failed = 0;

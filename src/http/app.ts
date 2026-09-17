@@ -6,7 +6,7 @@ import express, {
   type Response,
 } from 'express';
 
-import { HttpError } from '../errors.js';
+import { HttpError, RequestAbandonedError } from '../errors.js';
 import { FfmpegError } from '../hls/ffmpeg.js';
 import type { HlsService, ServedFile } from '../hls/hls-service.js';
 import { errorMessage, logger } from '../logger.js';
@@ -50,7 +50,13 @@ export function createApp({ hls, status }: AppDependencies): express.Express {
   app.get('/:infoHash/:fileIndex/*path', async (req, res) => {
     const { infoHash, fileIndex } = req.params;
     const parts = ([] as string[]).concat(req.params.path);
-    await sendFile(res, await hls.resolve(infoHash, fileIndex, parts));
+    const file = await hls.resolve(
+      infoHash,
+      fileIndex,
+      parts,
+      lifetime(res),
+    );
+    await sendFile(res, file);
   });
 
   app.use(() => {
@@ -91,6 +97,16 @@ function magnetFromQuery(req: Request): string {
   return [magnet, ...extras].join('&');
 }
 
+/**
+ * Aborts once the response is over, however it ended. 
+ * Players abort segment requests whenever they seek
+ */
+function lifetime(res: Response): AbortSignal {
+  const controller = new AbortController();
+  res.once('close', () => controller.abort(new RequestAbandonedError('Request ended')));
+  return controller.signal;
+}
+
 function sendFile(res: Response, file: ServedFile): Promise<void> {
   res.setHeader('Content-Type', file.contentType);
   res.setHeader('Cache-Control', file.cacheControl);
@@ -123,6 +139,12 @@ const requestLogger: RequestHandler = (req, res, next) => {
 };
 
 const errorHandler: ErrorRequestHandler = (err: unknown, req, res, _next) => {
+  // Nothing to report and nobody to report it to: the socket is already gone.
+  if (err instanceof RequestAbandonedError) {
+    logger.debug('Request abandoned', { path: req.path });
+    return;
+  }
+
   const status =
     err instanceof HttpError
       ? err.status

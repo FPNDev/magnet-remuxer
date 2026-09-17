@@ -47,12 +47,23 @@ export interface SliceTarget {
   readStart: number;
   readEnd: number;
   range: SliceRange;
+  /**
+   * Reading starts where the range's blocks should be, not where they could be,
+   * so whether it started early enough has to be checked against what it read.
+   */
+  verifyStart?: boolean;
 }
 
 /** A trailing segment shorter than this is merged into the previous one. */
 const MIN_TAIL_SECONDS = 1;
 /** How far a block may be stored from the video keyframes around it. */
 const INTERLEAVE_SLACK_SECONDS = 2;
+/**
+ * Slack for a read that assumes blocks sit in the cluster their timestamp falls
+ * in, as mkvmerge writes them. Just enough that a frame starting a moment after
+ * a keyframe does not look misplaced.
+ */
+const TIGHT_SLACK_SECONDS = 0.1;
 /** Worst-case cluster header plus enough of a block to read its header. */
 const BOUNDARY_PEEK_BYTES = 12 + 64;
 
@@ -221,13 +232,26 @@ export function keyframeSlice(
   };
 }
 
-/** Slice of one track's blocks with timestamps in [from, to) ticks. */
+/**
+ * Slice of one track's blocks with timestamps in [from, to) ticks.
+ *
+ * `tight` reads only the clusters those timestamps fall in. That is where
+ * mkvmerge stores them, and it is about half the bytes: the interleave slack is
+ * seconds of film on each side, and on a 4K remux that is tens of megabytes
+ * standing between a seek and its first frame. The slice says to check its
+ * start, and a short end shows up on its own, so a file that stores blocks
+ * further out falls back to the generous read.
+ */
 export function timeSlice(
   index: MediaIndex,
   from: number,
   to: number | null,
+  { tight = false }: { tight?: boolean } = {},
 ): SliceTarget {
-  const slack = secondsToTicks(index, INTERLEAVE_SLACK_SECONDS);
+  const slack = secondsToTicks(
+    index,
+    tight ? TIGHT_SLACK_SECONDS : INTERLEAVE_SLACK_SECONDS,
+  );
   let readStart = index.firstClusterOffset;
   let readEnd = index.mediaEnd;
 
@@ -240,7 +264,12 @@ export function timeSlice(
     }
   }
 
-  return { readStart, readEnd, range: { mode: 'time', from, to } };
+  return {
+    readStart,
+    readEnd,
+    range: { mode: 'time', from, to },
+    verifyStart: tight,
+  };
 }
 
 /** Upper bound for the end of the cluster holding keyframe `k`. */
