@@ -4,6 +4,7 @@ import { Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
 import type { ByteSource } from '../io/byte-source.js';
+import { logger } from '../logger.js';
 import {
   buildTrackHeader,
   EMPTY_CLUSTER,
@@ -87,6 +88,9 @@ interface Plan {
 
 /** Produces HLS init and media segments from Matroska byte ranges via ffmpeg. */
 export class Remuxer {
+  /** Files whose blocks are stored away from their timestamps' clusters. */
+  private readonly looselyInterleaved = new Set<string>();
+
   constructor(private readonly options: RemuxerOptions) {}
 
   /**
@@ -124,13 +128,31 @@ export class Remuxer {
     await writeFileAtomic(outPath, init);
   }
 
+  /** A tight read that came up short marks its file for generous reads. */
+  private noteShortRead(slice: SliceTarget, file: string): void {
+    if (!slice.verifyStart || this.looselyInterleaved.has(file)) {
+      return;
+    }
+    this.looselyInterleaved.add(file);
+    logger.info('Blocks are stored far from their clusters; reading wider', {
+      file,
+    });
+  }
+
   /** Writes media segment `n` as fMP4 (moof + mdat) or WebVTT. */
   async writeSegment(
     target: RemuxTarget,
     n: number,
     outPath: string,
   ): Promise<void> {
-    const { slices, args } = plan(target.index, target.rendition, n);
+    const planned = plan(target.index, target.rendition, n);
+    const { args } = planned;
+    const file = `${target.index.fileName}:${target.index.fileLength}`;
+    // Once a tight read has come up short for a file, it will again: go
+    // straight to the generous one rather than paying for both every time.
+    const slices = this.looselyInterleaved.has(file)
+      ? planned.slices.filter((slice) => !slice.verifyStart)
+      : planned.slices;
 
     for (const [attempt, slice] of slices.entries()) {
       const canRetry = attempt < slices.length - 1;
@@ -145,6 +167,7 @@ export class Remuxer {
         });
         const result = await this.run(target, slice, args, collector);
         if (!isComplete(target.index, slice, result)) {
+          this.noteShortRead(slice, file);
           if (canRetry) {
             continue;
           }
@@ -161,6 +184,7 @@ export class Remuxer {
         const result = await this.run(target, slice, args, splitter);
         await writing;
         if (!isComplete(target.index, slice, result)) {
+          this.noteShortRead(slice, file);
           if (canRetry) {
             continue;
           }
@@ -331,11 +355,9 @@ function aacPlan(
 
   const toTicks = (samples: number, marginSeconds: number) =>
     secondsToTicks(index, samples / rate + marginSeconds);
-  const slice = timeSlice(
-    index,
-    toTicks(encodeFrom, -AUDIO_READ_MARGIN_SECONDS),
-    encodeTo === null ? null : toTicks(encodeTo, AUDIO_READ_MARGIN_SECONDS),
-  );
+  const from = toTicks(encodeFrom, -AUDIO_READ_MARGIN_SECONDS);
+  const to =
+    encodeTo === null ? null : toTicks(encodeTo, AUDIO_READ_MARGIN_SECONDS);
 
   const filters: string[] = [];
   if (rendition.track.sampleRate !== rate) {
@@ -350,7 +372,13 @@ function aacPlan(
     `lt(pts\\,${start})` + (end === null ? '' : `+gte(pts\\,${end})`);
 
   return {
-    slices: [slice],
+    // Tight first: the same blocks from far fewer bytes, which is most of what
+    // a seek waits for. Both feed the encoder identical input when the tight
+    // one is complete, so the segment comes out the same either way.
+    slices: [
+      timeSlice(index, from, to, { tight: true }),
+      timeSlice(index, from, to),
+    ],
     args: [
       ...INPUT_ARGS,
       '-af',
@@ -375,6 +403,16 @@ function isComplete(
 
   if (range.mode === 'keyframes') {
     return range.endKeyframe === null || result.reachedEnd;
+  }
+  // Reading started at the cluster the range should begin in. If the track's
+  // first block there is already past the range's start, earlier blocks were
+  // stored before it.
+  if (
+    slice.verifyStart &&
+    slice.readStart > index.firstClusterOffset &&
+    (result.firstTrackTs === null || result.firstTrackTs > range.from)
+  ) {
+    return false;
   }
   // A time range feeds an encoder that stops reading once its window is full,
   // so a slice ending early only matters when the input itself ran out.

@@ -31,10 +31,18 @@ export const config = {
   /** Disk budget for rendered HLS segments. */
   segmentCacheBytes: number('SEGMENT_CACHE_MB', 15360) * MiB,
 
-  /** Target HLS segment length in seconds; real segments follow keyframes. */
-  segmentDuration: number('SEGMENT_DURATION', 6),
-  /** Segments rendered ahead of the one a player just requested. */
-  prefetchSegments: number('PREFETCH_SEGMENTS', 3),
+  /**
+   * Target HLS segment length in seconds; real segments follow keyframes. Short,
+   * because a seek has to download a whole segment before its first frame: on a
+   * 4K remux 6s is about 60 MiB, 2s about 20. Playback speed is the same either
+   * way - the film's bytes are the film's bytes.
+   */
+  segmentDuration: number('SEGMENT_DURATION', 2),
+  /**
+   * Segments rendered ahead of the one a player just requested. Nine 2s
+   * segments look as far ahead as three 6s ones did.
+   */
+  prefetchSegments: number('PREFETCH_SEGMENTS', 9),
   /**
    * Cap on how much a file may prefetch, in bytes read. Segments of a 4K remux
    * are tens of MB, so prefetching by count alone would flood the swarm.

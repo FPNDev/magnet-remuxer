@@ -3,7 +3,7 @@ import path from 'node:path';
 
 import type { CacheLayout } from '../cache/cache-layout.js';
 import type { SegmentCache } from '../cache/segment-cache.js';
-import { HttpError } from '../errors.js';
+import { HttpError, RequestAbandonedError } from '../errors.js';
 import { errorMessage, logger } from '../logger.js';
 import { getRenditions, type Rendition } from '../media/codecs.js';
 import {
@@ -16,7 +16,7 @@ import { isInfoHash, parseInfoHash } from '../torrent/magnet.js';
 import type { PieceCache } from '../torrent/piece-store.js';
 import type { TorrentManager } from '../torrent/torrent-manager.js';
 import { TorrentFileSource } from '../torrent/torrent-source.js';
-import { withTimeout } from '../util/async.js';
+import { untilAborted, withTimeout } from '../util/async.js';
 import { exists, readJson, writeFileAtomic } from '../util/fs.js';
 import { SingleFlight } from '../util/single-flight.js';
 import {
@@ -57,6 +57,19 @@ const SEGMENT_NAME = /^(\d+)\.(m4s|vtt)$/;
 const MEMORY_INDEX_LIMIT = 64;
 /** A player waiting this long for a job slot is worth a line in the log. */
 const SLOW_QUEUE_WAIT_MS = 5000;
+/**
+ * How long a playhead counts as live after its last segment. Long enough to
+ * cover a pause or a slow render, short enough that a viewer who left stops
+ * protecting prefetch nobody will watch.
+ */
+const HEAD_TTL_MS = 60_000;
+/**
+ * How often one prefetch may be preempted and queued again. Each attempt only
+ * starts once no player is waiting, so this bounds wasted renders, not delay.
+ */
+const PREFETCH_ATTEMPTS = 3;
+/** Longest run of look-ahead a rank counts; players ask for a few at a time. */
+const LOOKAHEAD_SEGMENTS = 8;
 
 const PLAYLIST_TYPE = 'application/vnd.apple.mpegurl';
 const PLAYLIST_CACHE = 'public, max-age=60';
@@ -66,8 +79,21 @@ const MEDIA_CACHE = 'public, max-age=86400';
 export class HlsService {
   private readonly indexes = new Map<string, MediaIndex>();
   private readonly flights = new SingleFlight();
-  /** Segments a player is waiting for; these are never cancelled or preempted. */
+  /**
+   * Segments players are waiting for, and how many are waiting. Refcounted
+   * rather than flagged: two viewers who happen to want the same segment share
+   * one job, and it only becomes abandonable when the last of them leaves.
+   */
   private readonly wanted = new Map<string, number>();
+  /**
+   * Where players are reading, per rendition directory: segment number to when
+   * it was last served. There is no session id anywhere in this server, and
+   * this is why it does not need one - a playhead is simply somewhere a
+   * segment was recently handed out, whoever asked for it.
+   */
+  private readonly heads = new Map<string, Map<number, number>>();
+  /** When every rendition's heads were last checked for expiry. */
+  private headsSweptAt = 0;
 
   constructor(private readonly options: HlsServiceOptions) {}
 
@@ -120,6 +146,7 @@ export class HlsService {
     infoHash: string,
     fileIndexParam: string,
     parts: string[],
+    signal?: AbortSignal,
   ): Promise<ServedFile> {
     if (!isInfoHash(infoHash)) {
       throw notFound(`Malformed info hash "${infoHash}"`);
@@ -183,6 +210,10 @@ export class HlsService {
       );
     }
 
+    // Before the wait, not after: a player that has moved on must not queue up
+    // behind prefetch for where it used to be. Doing this only once the segment
+    // arrived would make it unreachable in exactly the case it is needed.
+    this.dropStalePrefetch(infoHash, fileIndex, index, rendition, n);
     await this.orTimeout(
       this.ensureSegment(
         infoHash,
@@ -191,9 +222,11 @@ export class HlsService {
         rendition,
         n,
         Priority.Foreground,
+        signal,
       ),
       `segment ${n} of ${renditionPath(rendition)}`,
     );
+    this.markHead(dir, n);
     this.prefetch(infoHash, fileIndex, index, rendition, n);
     return {
       path: file,
@@ -345,7 +378,11 @@ export class HlsService {
       }
       await mkdir(path.dirname(file), { recursive: true });
       await this.options.queue.run(
-        { key: file, priority: Priority.Foreground, group: infoHash },
+        // An init section is built from the index or from silence and never
+        // reads the torrent, so it does not take one of the torrent's read
+        // slots - on a first play it is requested alongside segment 0, and
+        // would otherwise hold that segment up.
+        { key: file, priority: Priority.Foreground, group: `${infoHash}:init` },
         ({ signal }) =>
           this.options.remuxer.writeInit(index, rendition, file, signal),
       );
@@ -359,6 +396,7 @@ export class HlsService {
     rendition: Rendition,
     n: number,
     priority: Priority,
+    signal?: AbortSignal,
   ): Promise<void> {
     const { layout, queue, segments, torrents, remuxer, pieces } = this.options;
     const file = layout.mediaFile(
@@ -368,8 +406,20 @@ export class HlsService {
     );
 
     const isForeground = priority === Priority.Foreground;
+    if (signal?.aborted) {
+      throw new RequestAbandonedError(`Nobody is waiting for ${file}`);
+    }
+    // Asked again whenever the queue picks what runs next: requests for one
+    // landing can arrive out of order over separate connections, and a segment
+    // becomes the one a player needs next as the one before it completes.
+    const rank = isForeground
+      ? () => this.urgency(infoHash, fileIndex, rendition, n)
+      : 0;
+    // Whether this was the segment a player needed when it asked, rather than
+    // look-ahead - the only kind worth a warning when it has to wait.
+    const neededNow = typeof rank === 'function' && rank() === 0;
     if (isForeground) {
-      queue.promote(file);
+      queue.promote(file, rank);
       this.wanted.set(file, (this.wanted.get(file) ?? 0) + 1);
     }
 
@@ -379,16 +429,25 @@ export class HlsService {
           segments.touch(file);
           return;
         }
+        // Checking the disk takes a moment, and a player seeking quickly can
+        // give up within it: abandoning then finds nothing queued to remove.
+        // Queueing now would leave a job nobody waits for, which nothing can
+        // take the slot back from.
+        if (isForeground && !this.wanted.has(file)) {
+          throw new CancelledError(`Nobody is waiting for ${file}`);
+        }
 
         await queue.run(
-          { key: file, priority, group: infoHash },
+          { key: file, priority, group: infoHash, rank },
           ({ signal, waitedMs }) =>
             torrents.use(infoHash, async (torrent) => {
               const torrentFile = torrent.files[fileIndex];
               if (!torrentFile) {
                 throw new HttpError(404, `Torrent has no file #${fileIndex}`);
               }
-              if (isForeground && waitedMs > SLOW_QUEUE_WAIT_MS) {
+              // Look-ahead is meant to wait; only a segment a player cannot
+              // play without is worth a warning.
+              if (neededNow && waitedMs > SLOW_QUEUE_WAIT_MS) {
                 logger.warn('Player waited for a free job slot', {
                   rendition: renditionPath(rendition),
                   n,
@@ -425,18 +484,34 @@ export class HlsService {
         );
       });
 
-    try {
-      try {
-        await render();
-      } catch (err) {
-        // A player can arrive just as the prefetch it would have joined is
-        // preempted. The segment is wanted now, so start it again rather than
-        // hand back a cancellation.
-        if (!isForeground || !(err instanceof CancelledError)) {
-          throw err;
+    const attempt = async () => {
+      for (;;) {
+        try {
+          return await render();
+        } catch (err) {
+          // Preempted: prefetch this player joined, or look-ahead that gave
+          // its slot to a segment another track's first frame needed. The
+          // segment is still wanted, so it goes back in the queue - unless
+          // this player is the one that left.
+          if (
+            signal?.aborted ||
+            !isForeground ||
+            !(err instanceof CancelledError)
+          ) {
+            throw err;
+          }
         }
-        await render();
       }
+    };
+
+    try {
+      // The render carries on until the queue is told otherwise below; this
+      // only stops *waiting* on it, which is what lets the finally run at all.
+      await untilAborted(
+        attempt(),
+        signal,
+        () => new RequestAbandonedError(`Nobody is waiting for ${file}`),
+      );
     } finally {
       if (isForeground) {
         const waiting = (this.wanted.get(file) ?? 1) - 1;
@@ -444,6 +519,17 @@ export class HlsService {
           this.wanted.set(file, waiting);
         } else {
           this.wanted.delete(file);
+          // The last player waiting for this has gone. Queued, it would keep
+          // its place in a queue two jobs wide for as long as the torrent
+          // lives, which is how a scrub used to bury the segment wanted next;
+          // running, it would go on splitting the swarm with the reads that are
+          // wanted. It carries on only if some playhead is heading its way.
+          if (signal?.aborted) {
+            queue.abandon(
+              file,
+              this.isAhead(infoHash, fileIndex, index, rendition, n),
+            );
+          }
         }
       }
     }
@@ -457,6 +543,125 @@ export class HlsService {
     return Math.max(1, Math.min(this.options.prefetchSegments, affordable));
   }
 
+  /** The rendition's directory, which is also its key in `heads`. */
+  private renditionDir(
+    infoHash: string,
+    fileIndex: number,
+    rendition: Rendition,
+  ): string {
+    return this.options.layout.mediaFile(
+      infoHash,
+      fileIndex,
+      renditionPath(rendition),
+    );
+  }
+
+  /** Records that a player is reading at `n`, and that it has left `n - 1`. */
+  private markHead(dir: string, n: number): void {
+    let heads = this.heads.get(dir);
+    if (!heads) {
+      heads = new Map();
+      this.heads.set(dir, heads);
+    }
+    // Playing forwards moves a head rather than adding one, so the set stays
+    // the size of the audience instead of growing with the running time.
+    heads.delete(n - 1);
+    const now = Date.now();
+    heads.set(n, now);
+
+    // Renditions nobody asks for again would otherwise keep their last heads
+    // for the life of the process.
+    if (now - this.headsSweptAt > HEAD_TTL_MS) {
+      this.headsSweptAt = now;
+      for (const other of this.heads.keys()) {
+        this.liveHeads(other);
+      }
+    }
+  }
+
+  /**
+   * How urgent a player's request for `n` is, lower first: how many requests
+   * for the segments directly before it, in the same rendition, are still
+   * waiting - an unbroken run, `n - 1`, `n - 2` and so on.
+   *
+   * Players ask for a segment and the next few in one go - on load, after every
+   * seek, and as they play - one track after another. So the segment a frame
+   * needs is 0 in every track and its look-ahead counts up behind it: video and
+   * audio for a seek take the slots, and the next video segment does not slip
+   * in between them. The run has to be unbroken: a waiting request a few
+   * segments back may be someone else's, and says nothing about this one.
+   * Positions already served say nothing either; ranking off those made the
+   * segment after a short seek look like look-ahead.
+   *
+   * Two viewers each get their next segment before either gets the one after,
+   * without the server knowing they are two.
+   */
+  private urgency(
+    infoHash: string,
+    fileIndex: number,
+    rendition: Rendition,
+    n: number,
+  ): number {
+    const prefix = this.renditionDir(infoHash, fileIndex, rendition) + path.sep;
+    let rank = 0;
+    while (
+      rank < LOOKAHEAD_SEGMENTS &&
+      n - rank - 1 >= 0 &&
+      this.wanted.has(prefix + segmentFileName(rendition, n - rank - 1))
+    ) {
+      rank++;
+    }
+    return rank;
+  }
+
+  /** Playheads still worth prefetching for, dropping any that have gone quiet. */
+  private liveHeads(dir: string): number[] {
+    const heads = this.heads.get(dir);
+    if (!heads) {
+      return [];
+    }
+    const cutoff = Date.now() - HEAD_TTL_MS;
+    for (const [n, seen] of heads) {
+      if (seen < cutoff) {
+        heads.delete(n);
+      }
+    }
+    if (heads.size === 0) {
+      this.heads.delete(dir);
+    }
+    return [...heads.keys()];
+  }
+
+  /**
+   * Drops queued prefetch that no player is heading for. What survives is the
+   * union of every live playhead's window plus the caller's own: one viewer
+   * asking for segment 4 says nothing about the viewer reading segment 900, and
+   * cancelling by rendition alone would throw that viewer's prefetch away.
+   */
+  private dropStalePrefetch(
+    infoHash: string,
+    fileIndex: number,
+    index: MediaIndex,
+    rendition: Rendition,
+    n: number,
+  ): void {
+    const dir = this.renditionDir(infoHash, fileIndex, rendition);
+    const prefix = dir + path.sep;
+    const depth = this.prefetchDepth(index);
+    const last = segmentCount(index) - 1;
+
+    const keep = new Set<string>();
+    for (const head of [...this.liveHeads(dir), n]) {
+      for (let k = head; k <= Math.min(last, head + depth); k++) {
+        keep.add(prefix + segmentFileName(rendition, k));
+      }
+    }
+    this.options.queue.cancelBackground(
+      (key) =>
+        key.startsWith(prefix) && !keep.has(key) && !this.wanted.has(key),
+    );
+  }
+
   /** Renders the next few segments ahead of `n` in the background. */
   private prefetch(
     infoHash: string,
@@ -465,45 +670,65 @@ export class HlsService {
     rendition: Rendition,
     n: number,
   ): void {
-    const { layout, queue } = this.options;
-    const dir =
-      layout.mediaFile(infoHash, fileIndex, renditionPath(rendition)) +
-      path.sep;
     const last = Math.min(
       segmentCount(index) - 1,
       n + this.prefetchDepth(index),
     );
 
-    const upcoming = new Set<string>();
     for (let next = n + 1; next <= last; next++) {
-      upcoming.add(dir + segmentFileName(rendition, next));
+      this.prefetchSegment(infoHash, fileIndex, index, rendition, next, 1);
     }
-    // After a seek, queued prefetches around the old position are pointless.
-    queue.cancelBackground(
-      (key) =>
-        key.startsWith(dir) && !upcoming.has(key) && !this.wanted.has(key),
-    );
+  }
 
-    for (let next = n + 1; next <= last; next++) {
-      this.ensureSegment(
-        infoHash,
-        fileIndex,
-        index,
-        rendition,
-        next,
-        Priority.Background,
-      ).catch((err: unknown) => {
-        if (err instanceof CancelledError) {
-          return;
-        }
+  private prefetchSegment(
+    infoHash: string,
+    fileIndex: number,
+    index: MediaIndex,
+    rendition: Rendition,
+    n: number,
+    attempt: number,
+  ): void {
+    this.ensureSegment(
+      infoHash,
+      fileIndex,
+      index,
+      rendition,
+      n,
+      Priority.Background,
+    ).catch((err: unknown) => {
+      if (!(err instanceof CancelledError)) {
         logger.warn('Prefetch failed', {
           infoHash,
           rendition: renditionPath(rendition),
-          n: next,
+          n,
           error: errorMessage(err),
         });
-      });
-    }
+        return;
+      }
+      // Cancelled for one of two reasons. Swept, because no playhead is heading
+      // this way - then it stays gone. Or preempted by some player's request,
+      // quite possibly another viewer's, while a playhead still is - then it
+      // goes back in the queue.
+      if (
+        attempt < PREFETCH_ATTEMPTS &&
+        this.isAhead(infoHash, fileIndex, index, rendition, n)
+      ) {
+        this.prefetchSegment(infoHash, fileIndex, index, rendition, n, attempt + 1);
+      }
+    });
+  }
+
+  /** Whether segment `n` is inside some live playhead's prefetch window. */
+  private isAhead(
+    infoHash: string,
+    fileIndex: number,
+    index: MediaIndex,
+    rendition: Rendition,
+    n: number,
+  ): boolean {
+    const depth = this.prefetchDepth(index);
+    const dir = this.renditionDir(infoHash, fileIndex, rendition);
+    return this.liveHeads(dir).some((head) => head < n && n <= head + depth);
   }
 }
 

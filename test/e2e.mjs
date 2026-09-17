@@ -306,7 +306,21 @@ check(
   `${cachedSegment.ms}ms`,
 );
 
-const freshSegment = await get(subtitles[1].segments[3], false);
+// A segment holding a cue at any segment length: cues start every 2s from 1s,
+// so take the first segment one starts well inside of, clear of the keyframe
+// either edge is cut at.
+const cueSegment = (() => {
+  let start = 0;
+  return subtitles[1].durations.findIndex((duration) => {
+    const end = start + duration;
+    const found = Array.from({ length: 60 }, (_, i) => 1 + i * 2).some(
+      (cue) => cue > start + 0.2 && cue < end - 0.2,
+    );
+    start = end;
+    return found && start > 4;
+  });
+})();
+const freshSegment = await get(subtitles[1].segments[cueSegment], false);
 check(
   freshSegment.status === 200 && freshSegment.body.includes('-->'),
   'segment rendered after a restart, from saved torrent metadata',
