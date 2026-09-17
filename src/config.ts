@@ -33,9 +33,7 @@ export const config = {
 
   /**
    * Target HLS segment length in seconds; real segments follow keyframes. Short,
-   * because a seek has to download a whole segment before its first frame: on a
-   * 4K remux 6s is about 60 MiB, 2s about 20. Playback speed is the same either
-   * way - the film's bytes are the film's bytes.
+   * because a seek has to download a whole segment before its first frame
    */
   segmentDuration: number('SEGMENT_DURATION', 2),
   /**
