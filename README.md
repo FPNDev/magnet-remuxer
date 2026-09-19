@@ -96,12 +96,12 @@ All optional; `.env.example` lists every one of them at its default, and
 | `CACHE_DIR`            | `<tmp>/magnet-cache` | Where pieces, playlists and segments live.                                                                                           |
 | `PIECE_CACHE_MB`       | `8192`               | Disk budget for all cached torrent pieces together.                                                                                  |
 | `SEGMENT_CACHE_MB`     | `15360`              | Disk budget for rendered segments.                                                                                                   |
-| `SEGMENT_DURATION`     | `2`                  | Target segment length in seconds. A seek downloads a whole segment before its first frame, so shorter starts faster.              |
+| `SEGMENT_DURATION`     | `2`                  | Target segment length in seconds. A seek downloads a whole segment before its first frame, so shorter starts faster.                 |
 | `PREFETCH_SEGMENTS`    | `9`                  | Segments rendered ahead of the player.                                                                                               |
 | `PREFETCH_AHEAD_MB`    | `96`                 | Cap on prefetch by bytes read; segments of a big 4K remux might be tens of MB each.                                                  |
 | `REQUEST_TIMEOUT_S`    | `120`                | A request waiting longer than this fails with 504.                                                                                   |
 | `MAX_CONCURRENT_JOBS`  | `max(16, cpus)`      | Concurrent ffmpeg jobs across all torrents. Mostly waiting on the swarm rather than on CPU, so more than one per core is reasonable. |
-| `MAX_JOBS_PER_TORRENT` | `2`                  |  Concurrent jobs reading one torrent. Reads of the same torrent divide its bandwidth rather than adding to it.                    |
+| `MAX_JOBS_PER_TORRENT` | `2`                  | Concurrent jobs reading one torrent. Reads of the same torrent divide its bandwidth rather than adding to it.                        |
 | `JOB_TIMEOUT_S`        | `180`                | Hard limit for one segment job.                                                                                                      |
 | `READ_STALL_S`         | `45`                 | Fail a read when the _torrent_ receives nothing for this long.                                                                       |
 | `METADATA_TIMEOUT_S`   | `90`                 | How long to wait for torrent metadata.                                                                                               |

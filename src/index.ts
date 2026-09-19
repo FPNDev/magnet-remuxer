@@ -1,5 +1,6 @@
-import { mkdir, rm } from 'node:fs/promises';
+import './env.js';
 
+import { mkdir, rm } from 'node:fs/promises';
 import { CacheLayout } from './cache/cache-layout.js';
 import { SegmentCache } from './cache/segment-cache.js';
 import { config } from './config.js';
