@@ -4,7 +4,7 @@ An HTTP server that plays a torrent over HLS. `GET /m3u8?magnet=...` answers
 with a master playlist, and each segment behind that playlist is cut out of the
 torrent's MKV and remuxed into fragmented MP4 when a player asks for it. Only
 the bytes under the playhead and a short prefetch window are downloaded, so a
-two hour file starts in seconds and a seek costs one segment.
+two hour file starts in seconds from cold, in milliseconds when warmed, and a seek costs one segment.
 
 Video is never re-encoded. The elementary stream is copied into fMP4, which
 means 4K plays on a machine with no GPU. Audio is copied when a browser can
@@ -66,14 +66,6 @@ npm start           # tsc, then node dist/index.js
 node dist/index.js  # when the build is current
 ```
 
-The server logs its port and cache directory on startup, and shuts down on
-SIGINT and SIGTERM.
-
-Configuration is environment variables only. Copy `.env.example` to `.env` and
-edit it; `dotenv` loads that file before anything reads a value, and a variable
-already set in the environment wins over the file. A malformed number throws at
-startup rather than mid-request.
-
 ## Configuration
 
 | Variable               | Default              | What it does                                                                                                       |
@@ -107,13 +99,9 @@ startup rather than mid-request.
 | `METADATA_TIMEOUT_S`   | `90`                 | How long to wait for torrent metadata.                                                                             |
 | `TORRENT_IDLE_S`       | `600`                | Remove torrents unused for this long.                                                                              |
 
-Booleans read `0`, `false`, `no` and `off` as false and anything else as true.
-`.env.example` carries the reasoning behind the tuning defaults, including what
-was measured to arrive at them.
-
 ## HTTP API
 
-Every route is `GET`. CORS is open to any origin for `GET` and `HEAD`. Failures
+Every route is `GET`. Failures
 answer with `{"error": "..."}` and a status: 400 for a bad query, 404 for an
 unknown info hash, path or file, 422 for a file that cannot be indexed, 504 on
 timeout, 500 otherwise.
@@ -124,7 +112,7 @@ magnet carrying its own `&tr=` trackers works as well as a percent-encoded one.
 ### `GET /m3u8?magnet=<magnet>&file=<index>`
 
 Master playlist for one file, as `application/vnd.apple.mpegurl`. Without
-`file`, the largest MKV or WebM in the torrent is used. The first call builds
+`file`, the first MKV or WebM in the torrent is used. The first call builds
 the media index and writes the playlists, which takes as long as the swarm
 needs to serve the header and the cues; later calls answer from disk.
 

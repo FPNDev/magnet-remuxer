@@ -93,13 +93,13 @@ export class AssetRegistry {
   // The largest Matroska file is the feature; samples and extras are smaller.
   async defaultFileIndex(infoHash: string): Promise<number> {
     const info = await this.options.torrents.info(infoHash);
-    const largest = info.files
-      .filter((file) => MATROSKA_FILE.test(file.name))
-      .sort((a, b) => b.length - a.length)[0];
-    if (!largest) {
+    const firstFile = info.files.filter((file) =>
+      MATROSKA_FILE.test(file.name),
+    )[0];
+    if (!firstFile) {
       throw new HttpError(404, 'Torrent contains no MKV or WebM files');
     }
-    return largest.index;
+    return firstFile.index;
   }
 
   private build(infoHash: string, fileIndex: number, index: MediaIndex): Asset {
