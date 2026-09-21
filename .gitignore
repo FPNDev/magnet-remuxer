@@ -1,0 +1,9 @@
+dist
+dist-before
+node_modules
+.env
+
+.claude
+CLAUDE.md
+.pre-commit-config.yaml
+scripts

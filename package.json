@@ -1,0 +1,34 @@
+{
+  "name": "magnet-remuxer",
+  "version": "1.0.0",
+  "description": "",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "tsc && node dist/index.js",
+    "test": "tsc && node test/run-all.mjs"
+  },
+  "keywords": [],
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.13.5",
+    "@types/webtorrent": "^3.0.0",
+    "oxlint": "^1.83.0",
+    "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.0",
+    "express": "^5.2.1",
+    "webtorrent": "^3.0.21"
+  },
+  "allowScripts": {
+    "bufferutil@4.1.0": true,
+    "ip-set@3.0.0": true,
+    "node-datachannel@0.32.3": true,
+    "utf-8-validate@6.0.6": true,
+    "utp-native@2.5.3": true
+  }
+}

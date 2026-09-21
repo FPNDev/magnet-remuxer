@@ -1,0 +1,8 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "rules": {
+    "curly": ["error", "all"],
+    "unicorn/no-array-for-each": "error"
+  },
+  "ignorePatterns": ["dist/*"]
+}
