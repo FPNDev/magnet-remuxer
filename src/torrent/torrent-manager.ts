@@ -43,7 +43,7 @@ export interface TorrentManagerOptions {
 const SWEEP_INTERVAL_MS = 30_000;
 // Reads, hedging and churn each attach listeners per torrent, well past
 // Node's default warning threshold of ten.
-const MAX_TORRENT_LISTENERS = 200;
+const MAX_TORRENT_LISTENERS = 1000;
 
 /**
  * Owns the WebTorrent client. Torrents are added on demand, leased while

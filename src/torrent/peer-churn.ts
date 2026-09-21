@@ -59,7 +59,7 @@ interface Seen {
 interface Address {
   fruitless: number;
   served: number;
-  offences: number;
+  offenses: number;
   lastSeen: number;
 }
 
@@ -155,7 +155,7 @@ export class PeerChurn {
     }
     for (const [address, record] of state.addresses) {
       if (
-        record.offences === 0 &&
+        record.offenses === 0 &&
         now - record.lastSeen > RECONNECT_WINDOW_MS
       ) {
         state.addresses.delete(address);
@@ -225,7 +225,7 @@ export class PeerChurn {
     const record = state.addresses.get(address) ?? {
       fruitless: 0,
       served: 0,
-      offences: 0,
+      offenses: 0,
       lastSeen: now,
     };
     state.addresses.set(address, record);
@@ -243,19 +243,19 @@ export class PeerChurn {
     if (record.served > 0 || record.fruitless < FRUITLESS_LIMIT) {
       return;
     }
-    const ms = Math.min(BAN_MS, FREELOAD_BAN_MS * 2 ** record.offences);
+    const ms = Math.min(BAN_MS, FREELOAD_BAN_MS * 2 ** record.offenses);
     this.bans.block(
       state.torrent.infoHash,
       address,
       ms,
       'reconnects without serving',
     );
-    record.offences++;
+    record.offenses++;
     record.fruitless = 0;
     logger.info('Banning a peer that reconnects without serving', {
       infoHash: state.torrent.infoHash,
       peer: address,
-      offences: record.offences,
+      offences: record.offenses,
       banMs: ms,
     });
   }
