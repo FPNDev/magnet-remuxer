@@ -8,7 +8,6 @@ const LEVELS: Record<LogLevel, number> = {
   warn: 30,
   error: 40,
 };
-// Resolved once at load, so a LOG_LEVEL change needs a restart.
 const threshold = LEVELS[config.logLevel];
 
 type Fields = Record<string, unknown>;

@@ -129,7 +129,7 @@ export class DiskGuard {
         freed,
         sweptAt: Date.now(),
       };
-      logger.debug('Cache swept', { ...this.usage, ...freed });
+      logger.debug('Cache swept', { ...this.usage });
       return this.usage;
     } catch (err: unknown) {
       logger.warn('Could not sweep the cache', { error: errorMessage(err) });
