@@ -26,10 +26,10 @@ const BAN_MS = 10 * 60_000;
 const WANTED_WINDOW = 256;
 // How many connections an address may spend without serving a byte before
 // it is treated as a freeloader rather than a slow starter.
-const FRUITLESS_LIMIT = 3;
+const FRUITLESS_LIMIT = 10;
 // Connection counts older than this are stale. A peer that comes back
 // slower than this is reconnecting, not hammering.
-const RECONNECT_WINDOW_MS = 120_000;
+const RECONNECT_WINDOW_MS = 60_000;
 // The first freeload ban. It doubles with every further offence and stops
 // at BAN_MS, so a mistake costs a minute and a repeat offender ten.
 const FREELOAD_BAN_MS = 60_000;
@@ -233,7 +233,7 @@ export class PeerChurn {
       record.fruitless = 0;
     }
     record.lastSeen = now;
-    const bytes = Math.max(wire.downloaded, state.seen.get(wire)?.bytes ?? 0);
+    const bytes = wire.downloaded + (state.seen.get(wire)?.bytes ?? 0);
     if (bytes > 0) {
       record.served += bytes;
       record.fruitless = 0;
