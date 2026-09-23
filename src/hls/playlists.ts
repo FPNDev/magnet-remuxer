@@ -14,6 +14,7 @@ import type { MkvTrack } from '../matroska/tracks.js';
 
 const AUDIO_GROUP = 'audio';
 const SUBTITLE_GROUP = 'subs';
+const VIDEO_GROUP = 'video';
 
 // HLS wants BCP 47 language tags. Matroska carries ISO 639-2, which has
 // both a bibliographic and a terminological code for some languages.
@@ -130,11 +131,13 @@ export function masterPlaylist(
     `${basePath}/${renditionPath(rendition)}/index.m3u8`;
   const lines = ['#EXTM3U', '#EXT-X-VERSION:7', '#EXT-X-INDEPENDENT-SEGMENTS'];
 
+  const namesMap = new Map<string, number>();
+
   // At most one member of an audio group may be DEFAULT.
   const defaultAudio =
     renditions.audio.find((audio) => audio.track.isDefault) ??
     renditions.audio[0];
-  const audioNames = new Set<string>();
+
   for (const audio of renditions.audio) {
     const channels = audio.transcode
       ? aacChannels(audio.track)
@@ -143,7 +146,7 @@ export function masterPlaylist(
       `#EXT-X-MEDIA:${attributes({
         TYPE: 'AUDIO',
         'GROUP-ID': quoted(AUDIO_GROUP),
-        NAME: quoted(uniqueLabel(audio.track, audioNames)),
+        NAME: quoted(uniqueLabel(audio.track, namesMap)),
         LANGUAGE: optionalQuoted(bcp47(audio.track.language)),
         DEFAULT: audio === defaultAudio ? 'YES' : 'NO',
         AUTOSELECT: 'YES',
@@ -153,13 +156,14 @@ export function masterPlaylist(
     );
   }
 
-  const subtitleNames = new Set<string>();
+  namesMap.clear();
+
   for (const subtitle of renditions.subtitles) {
     lines.push(
       `#EXT-X-MEDIA:${attributes({
         TYPE: 'SUBTITLES',
         'GROUP-ID': quoted(SUBTITLE_GROUP),
-        NAME: quoted(uniqueLabel(subtitle.track, subtitleNames)),
+        NAME: quoted(uniqueLabel(subtitle.track, namesMap)),
         LANGUAGE: optionalQuoted(bcp47(subtitle.track.language)),
         DEFAULT: 'NO',
         AUTOSELECT: 'YES',
@@ -172,15 +176,33 @@ export function masterPlaylist(
   const { track } = renditions.video;
   const codecs = [renditions.video, ...renditions.audio].map(codecString);
   const averageBandwidth = Math.round((index.fileLength * 8) / index.duration);
+  namesMap.clear();
+
   lines.push(
-    `#EXT-X-STREAM-INF:${attributes({
-      // BANDWIDTH is a peak figure. Per-segment rates are not indexed, so the
-      // file average stands in for it.
-      BANDWIDTH: String(Math.round(averageBandwidth * 1.5)),
-      'AVERAGE-BANDWIDTH': String(averageBandwidth),
+    `#EXT-X-MEDIA:${attributes({
+      TYPE: 'VIDEO',
+      'GROUP-ID': quoted(VIDEO_GROUP),
+      NAME: quoted(uniqueLabel(track, namesMap)),
+      LANGUAGE: optionalQuoted(bcp47(track.language)),
       CODECS: codecs.every(Boolean)
         ? quoted([...new Set(codecs)].join(','))
         : undefined,
+      DEFAULT: 'YES',
+      AUTOSELECT: 'YES',
+      URI: quoted(uri(renditions.video)),
+    })}`,
+  );
+
+  lines.push(
+    `#EXT-X-STREAM-INF:${attributes({
+      BANDWIDTH: String(Math.round(averageBandwidth * 1.5)),
+      'AVERAGE-BANDWIDTH': String(averageBandwidth),
+      AUDIO: renditions.audio.length ? quoted(AUDIO_GROUP) : undefined,
+      SUBTITLES: renditions.subtitles.length
+        ? quoted(SUBTITLE_GROUP)
+        : undefined,
+      VIDEO: quoted(VIDEO_GROUP),
+      'CLOSED-CAPTIONS': 'NONE',
       RESOLUTION:
         track.width && track.height
           ? `${track.width}x${track.height}`
@@ -188,11 +210,6 @@ export function masterPlaylist(
       'FRAME-RATE': track.defaultDurationNs
         ? (1e9 / track.defaultDurationNs).toFixed(3)
         : undefined,
-      AUDIO: renditions.audio.length ? quoted(AUDIO_GROUP) : undefined,
-      SUBTITLES: renditions.subtitles.length
-        ? quoted(SUBTITLE_GROUP)
-        : undefined,
-      'CLOSED-CAPTIONS': 'NONE',
     })}`,
     uri(renditions.video),
   );
@@ -224,7 +241,7 @@ function bcp47(language: string): string | undefined {
   return ISO_639_1[language.toLowerCase()] ?? language;
 }
 
-function uniqueLabel(track: MkvTrack, used: Set<string>): string {
+function uniqueLabel(track: MkvTrack, used: Map<string, number>): string {
   const language = bcp47(track.language);
   let label = track.name;
   if (!label && language) {
@@ -234,11 +251,13 @@ function uniqueLabel(track: MkvTrack, used: Set<string>): string {
       label = undefined;
     }
   }
-  label ||= `Track ${track.number}`;
+  label ||= `Track`;
 
-  if (used.has(label)) {
-    label = `${label} (${track.number})`;
+  const usedTimes = (used.get(label) ?? 0) + 1;
+  if (usedTimes > 1) {
+    label = `${label} #${usedTimes}`;
   }
-  used.add(label);
+  used.set(label, usedTimes);
+
   return label;
 }
