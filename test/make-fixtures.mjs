@@ -1,281 +1,253 @@
-import { existsSync, writeFileSync } from 'node:fs';
+// Builds the MKVs the suites read. They are skipped when already present
+// unless the builder changed or `--force` was passed, so a run toying with one
+// suite does not pay for ffmpeg every time.
+//
+//   node test/make-fixtures.mjs [--force]
+
 import path from 'node:path';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 
-import { ffmpeg, fixturesDir, section } from './lib.mjs';
+import { ffmpeg, fixtureDir, resolveBinaries, workDir } from './lib.mjs';
 
-// Fixtures are built once into test/.work/fixtures. Pass --force to rebuild
-// them after changing anything here.
-const force = process.argv.includes('--force');
-const movie = path.join(fixturesDir, 'movie.mkv');
-const tiny = path.join(fixturesDir, 'tiny.mkv');
-const sparse = path.join(fixturesDir, 'sparse.mkv');
-const codecs = path.join(fixturesDir, 'codecs.mkv');
+// Bumped whenever a fixture's shape changes. Fixtures built by anything other
+// than this builder are rebuilt.
+const BUILDER = 3;
 
-if (
-  !force &&
-  existsSync(movie) &&
-  existsSync(tiny) &&
-  existsSync(sparse) &&
-  existsSync(codecs)
-) {
-  console.log(`fixtures already present in ${fixturesDir}`);
-  process.exit(0);
-}
+// Keyframes land every 1.7 seconds, so no segment boundary falls on a round
+// second and a playlist cannot be right by accident.
+const KEYFRAME_SECONDS = 1.7;
+const MOVIE_SECONDS = 120;
+const SPARSE_SECONDS = 30;
+const CODECS_SECONDS = 12;
+const TINY_SECONDS = 30;
 
-section('building fixtures');
-
-const pad = (n, width = 2) => String(n).padStart(width, '0');
-const srtTime = (seconds) => {
-  const ms = Math.round(seconds * 1000);
-  return `${pad(Math.floor(ms / 3600000))}:${pad(Math.floor(ms / 60000) % 60)}:${pad(Math.floor(ms / 1000) % 60)},${pad(ms % 1000, 3)}`;
+const VIDEO = {
+  movie: { size: '1280x720', rate: 24 },
+  sparse: { size: '480x270', rate: 24 },
+  codecs: { size: '256x144', rate: 15 },
+  tiny: { size: '64x64', rate: 10 },
 };
 
-let srt = '';
-for (let i = 0; i < 60; i++) {
-  const start = 1 + i * 2;
-  srt += `${i + 1}\n${srtTime(start)} --> ${srtTime(start + 1.5)}\nCue ${i + 1} at ${start}s\n\n`;
+const SRT = {
+  'en.srt': { cues: 60, from: 0.2, every: 2, until: 120 },
+  'sparse.srt': { cues: 3, from: 0.5, every: 2, until: 6 },
+};
+
+function subtitleTrack(name) {
+  const spec = SRT[name];
+  const lines = [];
+  for (let cue = 0; cue < spec.cues; cue++) {
+    const start = spec.from + cue * spec.every;
+    const end = Math.min(start + 1.5, spec.until);
+    lines.push(String(cue + 1), `${stamp(start)} --> ${stamp(end)}`, `Cue ${cue + 1}`, '');
+  }
+  return `${lines.join('\n')}\n`;
 }
-const subtitles = path.join(fixturesDir, 'en.srt');
-writeFileSync(subtitles, srt);
 
-// movie.mkv: keyframes every 1.7s, so segment boundaries never land on a
-// round second. AAC stereo is copied, the 5.1 AC3 track needs a transcode.
-const channel = '0.4*sin(2*PI*330*t)';
-await ffmpeg([
-  '-y',
-  '-f',
-  'lavfi',
-  '-i',
-  'testsrc2=size=1280x720:rate=24000/1001',
-  '-f',
-  'lavfi',
-  '-i',
-  'sine=frequency=440:sample_rate=48000',
-  '-f',
-  'lavfi',
-  '-i',
-  `aevalsrc=${Array(6).fill(channel).join('|')}:c=5.1:s=48000`,
-  '-i',
-  subtitles,
-  '-i',
-  subtitles,
-  '-map',
-  '0:v',
-  '-map',
-  '1:a',
-  '-map',
-  '2:a',
-  '-map',
-  '3:s',
-  '-map',
-  '4:s',
-  '-t',
-  '120',
-  '-c:v',
-  'libx264',
-  '-preset',
-  'veryfast',
-  '-pix_fmt',
-  'yuv420p',
-  '-x264-params',
-  'keyint=72:min-keyint=24:scenecut=0:bframes=3:b-pyramid=normal',
-  '-force_key_frames',
-  'expr:gte(t,n_forced*1.7)',
-  '-c:a:0',
-  'aac',
-  '-b:a:0',
-  '128k',
-  '-c:a:1',
-  'ac3',
-  '-b:a:1',
-  '384k',
-  '-c:s:0',
-  'srt',
-  '-c:s:1',
-  'ass',
-  '-metadata:s:a:0',
-  'language=eng',
-  '-metadata:s:a:0',
-  'title=English Stereo',
-  '-metadata:s:a:1',
-  'language=ukr',
-  '-metadata:s:a:1',
-  'title=Ukrainian 5.1',
-  '-metadata:s:s:0',
-  'language=eng',
-  '-metadata:s:s:0',
-  'title=English SRT',
-  '-metadata:s:s:1',
-  'language=eng',
-  '-metadata:s:s:1',
-  'title=English ASS',
-  '-disposition:a:0',
-  'default',
-  '-disposition:a:1',
-  '0',
-  '-disposition:s:0',
-  '0',
-  '-disposition:s:1',
-  '0',
-  movie,
-]);
-console.log(`built ${movie}`);
+function stamp(seconds) {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const rest = seconds % 60;
+  const whole = Math.floor(rest);
+  const millis = Math.round((rest - whole) * 1000);
+  const pad = (value, width = 2) => String(value).padStart(width, '0');
+  return `${pad(hours)}:${pad(minutes)}:${pad(whole)},${pad(millis, 3)}`;
+}
 
-// sparse.mkv: two subtitle cues in the first six seconds and none after,
-// so most subtitle segments come out empty.
-const sparseSubtitles = path.join(fixturesDir, 'sparse.srt');
-writeFileSync(
-  sparseSubtitles,
-  `1\n${srtTime(1)} --> ${srtTime(3)}\nOnly cue near the start\n\n2\n${srtTime(4)} --> ${srtTime(6)}\nSecond and last cue\n\n`,
-);
-await ffmpeg([
-  '-y',
-  '-f',
-  'lavfi',
-  '-i',
-  'color=c=navy:s=160x120:r=24',
-  '-f',
-  'lavfi',
-  '-i',
-  'sine=frequency=220:sample_rate=48000',
-  '-i',
-  sparseSubtitles,
-  '-map',
-  '0:v',
-  '-map',
-  '1:a',
-  '-map',
-  '2:s',
-  '-t',
-  '60',
-  '-c:v',
-  'libx264',
-  '-preset',
-  'veryfast',
-  '-pix_fmt',
-  'yuv420p',
-  '-x264-params',
-  'keyint=48:min-keyint=48:scenecut=0:bframes=2',
-  '-c:a',
-  'aac',
-  '-b:a',
-  '64k',
-  '-c:s',
-  'srt',
-  '-metadata:s:s:0',
-  'language=eng',
-  sparse,
-]);
-console.log(`built ${sparse}`);
+/** Intermediates live in the disposable work directory, not beside fixtures. */
+function tmpDir() {
+  return path.join(workDir, 'tmp');
+}
 
-// codecs.mkv: DTS, TrueHD, FLAC and Vorbis over 5.1 and 7.1 layouts, for
-// the copy-or-transcode decision and the AAC channel limit.
-await ffmpeg([
-  '-y',
-  '-f',
-  'lavfi',
-  '-i',
-  'color=c=teal:s=160x120:r=24',
-  '-f',
-  'lavfi',
-  '-i',
-  'sine=frequency=440:sample_rate=48000',
-  '-f',
-  'lavfi',
-  '-i',
-  'sine=frequency=330:sample_rate=48000',
-  '-f',
-  'lavfi',
-  '-i',
-  'sine=frequency=220:sample_rate=48000',
-  '-f',
-  'lavfi',
-  '-i',
-  'sine=frequency=170:sample_rate=48000',
-  '-map',
-  '0:v',
-  '-map',
-  '1:a',
-  '-map',
-  '2:a',
-  '-map',
-  '3:a',
-  '-map',
-  '4:a',
-  '-t',
-  '16',
-  '-c:v',
-  'libx264',
-  '-preset',
-  'veryfast',
-  '-pix_fmt',
-  'yuv420p',
-  '-x264-params',
-  'keyint=48:min-keyint=48:scenecut=0',
-  '-filter:a:0',
-  'aformat=channel_layouts=5.1',
-  '-filter:a:3',
-  'aformat=channel_layouts=7.1',
-  '-c:a:0',
-  'dca',
-  '-strict',
-  '-2',
-  '-c:a:1',
-  'truehd',
-  '-ac:a:1',
-  '2',
-  '-c:a:2',
-  'flac',
-  '-ac:a:2',
-  '2',
-  '-c:a:3',
-  'libvorbis',
-  '-metadata:s:a:0',
-  'language=eng',
-  '-metadata:s:a:0',
-  'title=DTS 5.1',
-  '-metadata:s:a:1',
-  'language=eng',
-  '-metadata:s:a:1',
-  'title=TrueHD Stereo',
-  '-metadata:s:a:2',
-  'language=eng',
-  '-metadata:s:a:2',
-  'title=FLAC Stereo',
-  '-metadata:s:a:3',
-  'language=eng',
-  '-metadata:s:a:3',
-  'title=Vorbis 7.1',
-  codecs,
-]);
-console.log(`built ${codecs}`);
+function keyframeArgs(seconds) {
+  return ['-force_key_frames', `expr:gte(t,n_forced*${seconds})`];
+}
 
-// tiny.mkv: 64x64 with a keyframe every half second, so suites that need
-// many segments build and remux in seconds.
-await ffmpeg([
-  '-y',
-  '-f',
-  'lavfi',
-  '-i',
-  'color=c=gray:s=64x64:r=24',
-  '-f',
-  'lavfi',
-  '-i',
-  'sine=frequency=440:sample_rate=8000',
-  '-t',
-  '60',
-  '-c:v',
-  'libx264',
-  '-preset',
-  'veryfast',
-  '-x264-params',
-  'keyint=12:min-keyint=12:scenecut=0:bframes=2',
-  '-c:a',
-  'aac',
-  '-b:a',
-  '12k',
-  '-ac',
-  '1',
-  tiny,
-]);
-console.log(`built ${tiny}`);
+async function buildMovie(target, seconds) {
+  const { size, rate } = VIDEO.movie;
+  return ffmpeg([
+    '-y',
+    '-loglevel', 'error',
+    '-f', 'lavfi', '-i', `testsrc2=size=${size}:rate=${rate}:duration=${seconds}`,
+    '-f', 'lavfi', '-i', `sine=frequency=440:sample_rate=48000:duration=${seconds}`,
+    '-f', 'lavfi', '-i', `sine=frequency=220:sample_rate=48000:duration=${seconds}`,
+    '-i', path.join(fixtureDir, 'en.srt'),
+    '-map', '0:v', '-map', '1:a', '-map', '2:a', '-map', '3:s',
+    // A bitrate cap rather than a quality target: what these suites need is
+    // exact keyframe placement, not picture detail, and the file stays small
+    // enough to seed and hash quickly.
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+    '-b:v', '250k', '-maxrate', '300k', '-bufsize', '600k',
+    ...keyframeArgs(KEYFRAME_SECONDS),
+    // Stereo AAC a browser can decode, so this track is copied.
+    '-c:a:0', 'aac', '-ac:a:0', '2', '-b:a:0', '96k',
+    // 5.1 AC3 has to be transcoded downstream.
+    '-c:a:1', 'ac3', '-ac:a:1', '6', '-b:a:1', '384k',
+    '-c:s', 'srt',
+    '-metadata:s:v:0', 'title=Video', '-metadata:s:a:0', 'title=Stereo AAC',
+    '-metadata:s:a:1', 'title=Surround AC3', '-metadata:s:s:0', 'title=English',
+    '-metadata:s:a:0', 'language=eng', '-metadata:s:a:1', 'language=eng',
+    '-metadata:s:s:0', 'language=eng',
+    target,
+  ]);
+}
+
+async function buildSparse(target, seconds) {
+  const { size, rate } = VIDEO.sparse;
+  return ffmpeg([
+    '-y',
+    '-loglevel', 'error',
+    '-f', 'lavfi', '-i', `testsrc2=size=${size}:rate=${rate}:duration=${seconds}`,
+    '-f', 'lavfi', '-i', `sine=frequency=330:sample_rate=48000:duration=${seconds}`,
+    '-i', path.join(fixtureDir, 'sparse.srt'),
+    '-map', '0:v', '-map', '1:a', '-map', '2:s',
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+    '-b:v', '120k', '-maxrate', '160k', '-bufsize', '320k',
+    ...keyframeArgs(KEYFRAME_SECONDS),
+    '-c:a', 'aac', '-ac', '2', '-b:a', '64k',
+    '-c:s', 'srt',
+    '-metadata:s:a:0', 'language=eng', '-metadata:s:s:0', 'language=eng',
+    target,
+  ]);
+}
+
+async function buildCodecs(target, seconds) {
+  const { size, rate } = VIDEO.codecs;
+  const scratch = path.join(tmpDir(), 'codecs');
+  await mkdir(scratch, { recursive: true });
+
+  // Four exotic audio codecs refuse to open their encoders when they share one
+  // filter graph, so each track is encoded on its own and muxed afterwards.
+  const tracks = [
+    { name: 'dts.mka', layout: 6, args: ['dca', '-strict', '-2'] },
+    { name: 'truehd.mka', layout: 6, args: ['truehd', '-strict', '-2'] },
+    { name: 'flac.mka', layout: 8, args: ['flac', '-strict', '-2'] },
+    { name: 'vorbis.mka', layout: 8, args: ['libvorbis'] },
+    // The dca and libvorbis encoders both reject a supplied bitrate, so those
+    // two keep their defaults.
+  ];
+
+  const video = path.join(scratch, 'video.mkv');
+  let result = await ffmpeg([
+    '-y', '-loglevel', 'error',
+    '-f', 'lavfi', '-i', `testsrc2=size=${size}:rate=${rate}:duration=${seconds}`,
+    '-an',
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+    '-b:v', '80k', '-maxrate', '100k', '-bufsize', '200k',
+    '-g', String(rate * 2),
+    video,
+  ]);
+  if (result.code !== 0) {
+    return result;
+  }
+
+  for (const [index, track] of [...tracks].entries()) {
+    const file = path.join(scratch, track.name);
+    track.file = file;
+    // DTS, TrueHD and Vorbis cannot be served as they are, so those three have
+    // to be transcoded downstream. FLAC is copied. The 7.1 layouts decide what
+    // channel count a transcode lands on.
+    result = await ffmpeg([
+      '-y', '-loglevel', 'error',
+      '-f', 'lavfi', '-i',
+      `anoisesrc=color=${['pink', 'white', 'brown', 'violet'][index]}:amplitude=0.05:sample_rate=48000:duration=${seconds}`,
+      '-c:a', ...track.args, '-ac', String(track.layout),
+      file,
+    ]);
+    if (result.code !== 0) {
+      return result;
+    }
+  }
+
+  const args = ['-y', '-loglevel', 'error', '-i', video];
+  for (const track of tracks) {
+    args.push('-i', track.file);
+  }
+  args.push('-map', '0:v');
+  for (const [index] of [...tracks].entries()) {
+    args.push('-map', `${index + 1}:a`);
+  }
+  args.push('-c', 'copy');
+  for (const [index, track] of [...tracks].entries()) {
+    args.push(`-metadata:s:a:${index}`, `title=${track.name.split('.')[0]} ${track.layout}ch`);
+    args.push(`-metadata:s:a:${index}`, 'language=eng');
+  }
+  args.push(target);
+  return ffmpeg(args);
+}
+
+async function buildTiny(target, seconds) {
+  const { size, rate } = VIDEO.tiny;
+  return ffmpeg([
+    '-y',
+    '-loglevel', 'error',
+    '-f', 'lavfi', '-i', `testsrc2=size=${size}:rate=${rate}:duration=${seconds}`,
+    '-f', 'lavfi', '-i', `sine=frequency=660:sample_rate=48000:duration=${seconds}`,
+    '-map', '0:v', '-map', '1:a',
+    // A keyframe every half second gives many segments for little work.
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+    '-b:v', '60k',
+    ...keyframeArgs(0.5),
+    '-c:a', 'aac', '-ac', '2', '-b:a', '48k',
+    '-metadata:s:a:0', 'language=eng',
+    target,
+  ]);
+}
+
+const BUILDERS = [
+  { file: 'movie.mkv', build: buildMovie, seconds: MOVIE_SECONDS },
+  { file: 'sparse.mkv', build: buildSparse, seconds: SPARSE_SECONDS },
+  { file: 'codecs.mkv', build: buildCodecs, seconds: CODECS_SECONDS },
+  { file: 'tiny.mkv', build: buildTiny, seconds: TINY_SECONDS },
+];
+
+async function main() {
+  await resolveBinaries();
+  const force = process.argv.includes('--force') || process.env.FORCE === '1';
+  await mkdir(fixtureDir, { recursive: true });
+
+  const manifestPath = path.join(fixtureDir, 'manifest.json');
+  let manifest = { builder: 0 };
+  try {
+    manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  } catch {
+    // No manifest means these fixtures came from somewhere else.
+  }
+
+  const stale = force || manifest.builder !== BUILDER;
+
+  // Subtitles are text: rebuilt every run so a change to their cues lands even
+  // when the MKVs are reused.
+  for (const [name, _spec] of Object.entries(SRT)) {
+    await writeFile(path.join(fixtureDir, name), subtitleTrack(name), 'utf8');
+  }
+
+  for (const entry of BUILDERS) {
+    const target = path.join(fixtureDir, entry.file);
+    const missing = !(await stat(target).catch(() => undefined));
+    if (!stale && !missing) {
+      console.log(`fixture ${entry.file}: present, skipped`);
+      continue;
+    }
+    process.stdout.write(`fixture ${entry.file}: building... `);
+    const startedAt = Date.now();
+    const result = await entry.build(target, entry.seconds);
+    if (result.code !== 0) {
+      console.log('failed');
+      throw new Error(result.stderr.trim().split('\n').slice(-6).join('\n'));
+    }
+    console.log(`${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
+  }
+
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify({ builder: BUILDER, files: BUILDERS.map((entry) => entry.file) }, null, 2)}\n`,
+  );
+  await rm(tmpDir(), { recursive: true, force: true });
+  console.log(`fixtures ready in ${fixtureDir}`);
+}
+
+await main().catch((err) => {
+  console.error(`make-fixtures failed: ${err.message}`);
+  process.exitCode = 1;
+});

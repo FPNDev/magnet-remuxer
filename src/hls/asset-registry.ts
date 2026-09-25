@@ -16,9 +16,8 @@ import { ReadPriority, TorrentFileSource } from '../torrent/torrent-source.js';
 import { readJson, writeFileAtomic } from '../util/fs.js';
 import { SizeLru } from '../util/lru.js';
 import { SingleFlight } from '../util/single-flight.js';
-import { CRITICAL_RANK, Priority, type TaskQueue } from '../util/task-queue.js';
+import { Priority, type TaskQueue } from '../util/task-queue.js';
 import { Asset } from './asset.js';
-import type { Playheads } from './playhead.js';
 import type { Remuxer } from './remux.js';
 
 export const MATROSKA_FILE = /\.(mkv|mk3d|webm)$/i;
@@ -33,11 +32,9 @@ export interface AssetRegistryOptions {
   segments: SegmentCache;
   remuxer: Remuxer;
   queue: TaskQueue;
-  playheads: Playheads;
   segmentDuration: number;
-  prefetchSegments: number;
-  prefetchAheadBytes: number;
   readStallMs: number;
+  warmSegments: number;
 }
 
 export class AssetRegistry {
@@ -53,10 +50,19 @@ export class AssetRegistry {
     return `index:${infoHash}/${fileIndex}`;
   }
 
+  static segmentKey(
+    infoHash: string,
+    fileIndex: number,
+    parts: string[],
+  ): string {
+    return `segment:${infoHash}/${fileIndex}/${parts.join('/')}`;
+  }
+
   async get(
     infoHash: string,
     fileIndex: number,
     priority: Priority = Priority.Foreground,
+    signal?: AbortSignal,
   ): Promise<Asset> {
     const key = `${infoHash}/${fileIndex}`;
     const cached = this.assets.get(key);
@@ -64,30 +70,23 @@ export class AssetRegistry {
       this.order.touch(key);
       return cached;
     }
-    // A player arriving behind a background index job lifts that job instead
-    // of queueing a second read of the same file.
+    const indexKey = AssetRegistry.indexKey(infoHash, fileIndex);
     if (priority === Priority.Foreground) {
-      this.options.queue.promote(
-        AssetRegistry.indexKey(infoHash, fileIndex),
-        CRITICAL_RANK,
-      );
+      this.options.queue.promote(indexKey);
     }
-    return this.flights.run(
-      AssetRegistry.indexKey(infoHash, fileIndex),
-      async () => {
-        const existing = this.assets.get(key);
-        if (existing) {
-          return existing;
-        }
-        const asset = this.build(
-          infoHash,
-          fileIndex,
-          await this.indexOf(infoHash, fileIndex, priority),
-        );
-        this.remember(key, asset);
-        return asset;
-      },
-    );
+    return this.flights.run(indexKey, signal, async () => {
+      const existing = this.assets.get(key);
+      if (existing) {
+        return existing;
+      }
+      const asset = this.build(
+        infoHash,
+        fileIndex,
+        await this.indexOf(infoHash, fileIndex, priority),
+      );
+      this.remember(key, asset);
+      return asset;
+    }).promise;
   }
 
   // The largest Matroska file is the feature; samples and extras are smaller.
@@ -110,10 +109,8 @@ export class AssetRegistry {
       segments,
       remuxer,
       queue,
-      playheads,
-      prefetchSegments,
-      prefetchAheadBytes,
       readStallMs,
+      warmSegments,
     } = this.options;
     return new Asset({
       infoHash,
@@ -125,10 +122,8 @@ export class AssetRegistry {
       segments,
       remuxer,
       queue,
-      playheads,
-      prefetchSegments,
-      prefetchAheadBytes,
       readStallMs,
+      warmSegments,
     });
   }
 
@@ -175,14 +170,11 @@ export class AssetRegistry {
   ): Promise<MediaIndex> {
     const { queue, torrents, pieces, segmentDuration, readStallMs } =
       this.options;
+
     return queue.run(
       {
         key: AssetRegistry.indexKey(infoHash, fileIndex),
         priority,
-        rank: CRITICAL_RANK,
-        // Indexing takes its own group so the per-torrent limit on segment jobs
-        // cannot starve it.
-        group: `${infoHash}:index`,
       },
       ({ signal }) =>
         torrents.use(infoHash, async (torrent) => {

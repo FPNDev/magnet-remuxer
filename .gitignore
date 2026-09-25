@@ -7,3 +7,4 @@ node_modules
 CLAUDE.md
 .pre-commit-config.yaml
 scripts
+test

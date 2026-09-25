@@ -1,103 +1,274 @@
-import { existsSync, readFileSync, rmSync } from 'node:fs';
-import { copyFile, mkdir, rm } from 'node:fs/promises';
+// Peer memory. The address a magnet carries has to be enough on its own: the
+// seeder here is a private torrent on loopback with DHT, LSD, trackers, PEX and
+// NAT traversal switched off (createSeeder in lib.mjs), so the magnet's `x.pe`
+// is the only thing that knows where it is. Once a title has been used, the
+// peers that served it are written under the cache directory, and a server
+// started later over that same directory finds the swarm again from what it
+// remembered.
+//
+//   node test/peers.mjs
+
+import { readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
-  check,
-  failureCount,
-  fixturesDir,
-  get,
-  seedFixture,
-  section,
-  startServer,
-  workDir,
+  cacheRoot,
+  ensureFixtures,
+  exists,
+  fileSize,
+  fixtures,
+  removeDir,
+  reporter,
+  resolveBinaries,
+  seed,
+  suitePort,
+  TestServer,
+  waitFor,
 } from './lib.mjs';
 
-const cacheDir = path.join(workDir, 'peers-cache');
-const port = Number(process.env.TEST_PORT ?? 3951);
-rmSync(cacheDir, { recursive: true, force: true });
-await mkdir(cacheDir, { recursive: true });
+const CACHE_DIR = `${cacheRoot}/peers`;
+const COLD_CACHE_DIR = `${cacheRoot}/peers-cold`;
+const PORT = suitePort(4);
 
-const {
-  client: seeder,
-  torrent: seeded,
-  magnet,
-} = await seedFixture(path.join(fixturesDir, 'movie.mkv'));
-const { infoHash } = seeded;
-const torrentDir = path.join(cacheDir, 'torrents', infoHash);
-const peersFile = path.join(torrentDir, 'peers.json');
-const magnetFile = path.join(torrentDir, 'magnet.txt');
-const savedPeers = path.join(workDir, 'peers-saved.json');
-// Short timeouts, so the server that cannot find the swarm gives up fast.
-const env = {
-  REQUEST_TIMEOUT_S: '8',
-  READ_STALL_S: '6',
-  METADATA_TIMEOUT_S: '8',
-};
-const segment = (base, n) => `${base}/${infoHash}/0/video/${n}.m4s`;
+await resolveBinaries();
+await ensureFixtures();
 
-section('remembered peers');
+const report = reporter('peers');
+// A piece length of our own, so the info hash is ours alone: another client on
+// this machine that happens to hold the same MKV cannot answer for it, which
+// is what makes the magnet the only way to find the seeder.
+const seeded = await seed(fixtures.tiny(), {
+  torrentOptions: { pieceLength: 16 * 1024 },
+});
+const address = `127.0.0.1:${seeded.port}`;
+const bareMagnet = seeded.torrent.magnetURI;
 
-const first = await startServer({ name: 'peers-first', port, cacheDir, env });
-const master = await get(
-  `${first.base}/m3u8?magnet=${encodeURIComponent(magnet)}`,
-  false,
-);
-const played = await get(segment(first.base, 0));
-await first.stop();
-
-check(
-  master.status === 200 && played.status === 200,
-  'the first player is served through the address in the magnet',
-  `${master.status}, ${played.status}`,
-);
-check(
-  existsSync(peersFile) &&
-    JSON.parse(readFileSync(peersFile, 'utf8')).some((peer) =>
-      peer.endsWith(`:${seeder.address().port}`),
-    ),
-  'the peer that served it is remembered',
-  existsSync(peersFile) ? readFileSync(peersFile, 'utf8') : 'no peers file',
-);
-
-if (!existsSync(peersFile)) {
-  seeder.destroy();
-  process.exit(1);
+/** Log lines written after the byte offset, so a restart can be read alone. */
+async function logSince(target, offset) {
+  const text = await readFile(target.logPath, 'utf8').catch(() => '');
+  return text.slice(offset);
 }
-await copyFile(peersFile, savedPeers);
-// The fixture seeder announces to no tracker and no DHT. With the magnet
-// and the remembered addresses gone, nothing can reach the swarm.
-await rm(magnetFile, { force: true });
-await rm(peersFile, { force: true });
 
-const blind = await startServer({
-  name: 'peers-blind',
-  port: port + 1,
-  cacheDir,
-  env,
+/** The fields of every log line in a slice carrying a given message. */
+function entries(log, message) {
+  const found = [];
+  for (const line of log.split('\n')) {
+    if (line.includes(message)) {
+      found.push(JSON.parse(line.slice(line.indexOf('{'))));
+    }
+  }
+  return found;
+}
+
+/** The peers file for a title, parsed. */
+async function rememberedPeers(cacheDir, infoHash) {
+  const file = path.join(cacheDir, 'torrents', infoHash, 'peers.json');
+  if (!(await exists(file))) {
+    return { file, present: false, peers: [] };
+  }
+  const stored = JSON.parse(await readFile(file, 'utf8'));
+  return { file, present: true, peers: stored };
+}
+
+report.section('the address in the magnet');
+
+// Control: the very same title, seeded by the very same client, asked for
+// without an address in the magnet. Trackers, DHT and LSD have the same chance
+// here that they get below, and none of them reaches the seeder.
+const cold = await TestServer.start({
+  name: 'peers-cold',
+  port: PORT,
+  cacheDir: COLD_CACHE_DIR,
+  options: { env: { METADATA_TIMEOUT_S: '10' } },
 });
-const unreachable = await get(segment(blind.base, 10));
-await blind.stop();
-check(
-  unreachable.status !== 200,
-  'without them the swarm cannot be found at all',
-  `${unreachable.status} in ${unreachable.ms}ms`,
+const coldResponse = await cold.request(
+  `/files?magnet=${encodeURIComponent(bareMagnet)}`,
+);
+await cold.stop();
+
+await report.check(
+  'a magnet that carries no address finds nothing',
+  async () => {
+    const error = coldResponse.json().error;
+    return {
+      passed: coldResponse.status === 504 && /metadata/i.test(error),
+      detail: `${coldResponse.status} ${error}; no trackers or DHT reach it`,
+    };
+  },
 );
 
-await copyFile(savedPeers, peersFile);
-const remembered = await startServer({
-  name: 'peers-remembered',
-  port: port + 2,
-  cacheDir,
-  env,
-});
-const served = await get(segment(remembered.base, 11));
-await remembered.stop();
-check(
-  served.status === 200,
-  'with them the torrent is reached and the segment is served',
-  `${served.status} in ${served.ms}ms`,
+const coldPeers = await rememberedPeers(COLD_CACHE_DIR, seeded.infoHash);
+
+await report.check(
+  'a title that was never served is not remembered',
+  async () => {
+    const missing = coldPeers.present === false;
+    return {
+      passed: missing && coldPeers.peers.length === 0,
+      detail:
+        `${coldPeers.file} ` +
+        `${coldPeers.present ? 'exists' : 'does not exist'}`,
+    };
+  },
 );
 
-seeder.destroy();
-process.exit(failureCount() ? 1 : 0);
+// The only difference from the control is `x.pe` in the magnet, and the
+// magnet is the only place that address was ever written down.
+const magic = await TestServer.start({
+  name: 'peers',
+  port: PORT,
+  cacheDir: CACHE_DIR,
+});
+const magicQuery = `magnet=${encodeURIComponent(seeded.magnet)}`;
+const mark = await fileSize(magic.logPath);
+const masterResponse = await magic.request(`/m3u8?${magicQuery}`);
+const firstSegment = `/${seeded.infoHash}/0/video/0.m4s`;
+const segmentResponse = await magic.request(firstSegment);
+const status = await magic.getJson('/status');
+const log = await logSince(magic, mark);
+
+const torrent = status.torrents.find(
+  (entry) => entry.infoHash === seeded.infoHash,
+);
+const added = entries(log, 'Adding torrent');
+const ready = entries(log, 'Torrent ready');
+
+await report.check('the address carried in the magnet serves the first request', async () => {
+  const ok =
+    masterResponse.status === 200 &&
+    masterResponse.text.startsWith('#EXTM3U') &&
+    segmentResponse.status === 200 &&
+    segmentResponse.bytes.length > 0 &&
+    torrent?.ready === true &&
+    torrent?.peers >= 1 &&
+    torrent?.downloaded > 0 &&
+    added.some((entry) => entry.from === 'magnet') &&
+    ready.some((entry) => entry.peers >= 1);
+  return {
+    passed: ok,
+    detail:
+      `master ${masterResponse.status}, segment ${segmentResponse.status} ` +
+      `${segmentResponse.bytes.length}B; /status peers=${torrent?.peers} ` +
+      `downloaded=${torrent?.downloaded}; log has ` +
+      `${added.length} "Adding torrent" and ` +
+      `${ready.length} "Torrent ready" line(s)`,
+  };
+});
+
+report.section('peers on disk');
+
+const saved = await waitFor(
+  async () => {
+    const found = await rememberedPeers(CACHE_DIR, seeded.infoHash);
+    return found.present ? found : false;
+  },
+  { timeoutMs: 30_000, intervalMs: 200 },
+);
+
+await report.check('the learned peers are on disk', async () => {
+  const ok =
+    Array.isArray(saved.peers) &&
+    saved.peers.includes(address) &&
+    saved.peers.length > 0;
+  return {
+    passed: ok,
+    detail: `${saved.file}: ${JSON.stringify(saved.peers)}`,
+  };
+});
+
+// A restart is the point of the whole exercise, so the peers have to be flushed
+// by the shutdown rather than by a lucky write in the middle of a read.
+await magic.stop();
+const flushed = await rememberedPeers(CACHE_DIR, seeded.infoHash);
+
+await report.check('the shutdown flushes what it learned', async () => {
+  return {
+    passed: flushed.present && flushed.peers.includes(address),
+    detail: `after SIGTERM: ${JSON.stringify(flushed.peers)}`,
+  };
+});
+
+// Two things would let the next server answer without its peer memory: the
+// stored magnet carries `x.pe` too, and the pieces already downloaded are
+// cached beside it. Both go, so every byte the next request needs has to come
+// from the address peers.json remembered.
+await rm(path.join(CACHE_DIR, 'torrents', seeded.infoHash, 'magnet.txt'));
+await removeDir(path.join(CACHE_DIR, 'pieces', seeded.infoHash));
+
+const second = await TestServer.start({
+  name: 'peers-again',
+  port: PORT,
+  cacheDir: CACHE_DIR,
+  options: { fresh: false },
+});
+const secondMark = await fileSize(second.logPath);
+const secondMaster = await second.request(`/m3u8?${magicQuery}`);
+const secondSegment = await second.request(`/${seeded.infoHash}/0/video/3.m4s`);
+
+const secondStatus = await waitFor(
+  async () => {
+    const current = await second.getJson('/status');
+    const entry = current.torrents.find(
+      (item) => item.infoHash === seeded.infoHash,
+    );
+    return entry && entry.peers >= 1 ? entry : false;
+  },
+  { timeoutMs: 30_000, intervalMs: 200 },
+);
+
+const secondLog = await logSince(second, secondMark);
+const secondAdded = entries(secondLog, 'Adding torrent');
+const secondReady = entries(secondLog, 'Torrent ready');
+
+report.section('a server started later');
+
+await report.check('the remembered peers are there to work from', async () => {
+  const ok =
+    secondMaster.status === 200 &&
+    secondMaster.text.startsWith('#EXTM3U') &&
+    secondSegment.status === 200 &&
+    secondSegment.bytes.length > 0 &&
+    secondStatus.peers >= 1 &&
+    secondAdded.some((entry) => entry.from === 'saved metadata');
+  return {
+    passed: ok,
+    detail:
+      `master ${secondMaster.status}, cold segment ${secondSegment.status} ` +
+      `${secondSegment.bytes.length}B (no address in the magnet); ` +
+      `/status peers=${secondStatus.peers}; log: ` +
+      `${secondAdded.map((entry) => entry.from).join(', ')}`,
+  };
+});
+
+await report.check('the new server says so in its log', async () => {
+  const ok =
+    secondAdded.length > 0 &&
+    secondAdded.every(
+      (entry) =>
+        entry.infoHash === seeded.infoHash && entry.from === 'saved metadata',
+    ) &&
+    secondReady.length > 0 &&
+    // Nothing on disk to reuse, so the bytes behind the segment below were
+    // asked for over the connection peers.json handed the new process.
+    !secondLog.includes('Reused cached pieces');
+  return {
+    passed: ok,
+    detail:
+      `added from=${secondAdded.map((entry) => entry.from).join(', ')}, ` +
+      `${secondReady.length} "Torrent ready" line(s), no cached pieces reused`,
+  };
+});
+
+const afterRestart = await rememberedPeers(CACHE_DIR, seeded.infoHash);
+await report.check('the memory survives being used', async () => {
+  return {
+    passed: afterRestart.present && afterRestart.peers.includes(address),
+    detail: JSON.stringify(afterRestart.peers),
+  };
+});
+
+await second.stop();
+await seeded.close();
+
+report.finish();
+process.exit(process.exitCode ?? 0);

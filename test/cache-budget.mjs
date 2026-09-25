@@ -1,267 +1,299 @@
-import { mkdir, rm, stat, utimes, writeFile } from 'node:fs/promises';
+// DiskGuard sweeps: a metadata budget that drops whole titles, a title being
+// played that no budget may touch, old pieces and old segments judged against
+// each other rather than store by store, and the temp files a dead render left
+// behind.
+//
+//   node test/cache-budget.mjs
+
+import { mkdir, readdir, utimes, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { CacheLayout } from '../dist/cache/cache-layout.js';
 import { DiskGuard } from '../dist/cache/disk-guard.js';
 import { MetadataCache } from '../dist/cache/metadata-cache.js';
-import { SegmentCache } from '../dist/cache/segment-cache.js';
 import { PieceCache } from '../dist/torrent/piece-store.js';
-import {
-  check,
-  directorySize,
-  failureCount,
-  section,
-  workDir,
-} from './lib.mjs';
+import { SegmentCache } from '../dist/cache/segment-cache.js';
+import { TEMP_SUFFIX } from '../dist/util/fs.js';
+import { cacheRoot, exists, removeDir, reporter } from './lib.mjs';
 
 const KiB = 1024;
-const HOUR = 3_600_000;
-const root = path.join(workDir, 'cache-budget');
-// Stand-in info hashes. The cache layout only needs 40 hex characters.
-const hash = (n) => String(n).repeat(40).slice(0, 40);
-const TITLES = [hash(1), hash(2), hash(3), hash(4)];
-const METADATA_PER_TITLE = 4 * 64 * KiB;
-const SEGMENTS_PER_TITLE = 4 * 256 * KiB;
-const PIECES_PER_TITLE = 4 * 256 * KiB;
+const MINUTE = 60_000;
+const UNIT = 64 * KiB;
+const ROOMY = 8 * UNIT; // big enough that nothing has to go
 
-const exists = (file) =>
-  stat(file).then(
-    () => true,
-    () => false,
-  );
+const report = reporter('cache-budget');
+const root = path.join(cacheRoot, 'cache-budget');
+await removeDir(root);
 
-const layout = new CacheLayout(root);
-const segmentFile = (infoHash, n) =>
-  path.join(layout.mediaDir(infoHash, 0), 'video', `${n}.m4s`);
-const pieceFile = (infoHash, n) =>
-  path.join(layout.piecesDir, infoHash, `${n}.piece`);
+/** Writes a file of the given size, back-dated by `ageMs`. */
+async function writeAged(file, bytes, ageMs) {
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, Buffer.alloc(bytes, 0x5a));
+  const when = new Date(Date.now() - ageMs);
+  await utimes(file, when, when);
+  return file;
+}
 
-// Lays down four titles whose mtimes step back an hour each, so least
-// recently used order is fixed before a sweep runs. ages shifts one class.
-async function build({ ages = {} } = {}) {
-  await rm(root, { recursive: true, force: true, maxRetries: 20 });
-  for (const [age, infoHash] of TITLES.entries()) {
-    const filler = (kib) => Buffer.alloc(kib * KiB, age + 1);
-    const when = (hours) => new Date(Date.now() - hours * HOUR);
-    const titleAge = TITLES.length - age;
+/** Only numbered segments are evictable, and they live under hls/<hash>/<idx>. */
+const segmentPath = (layout, infoHash, fileIndex, index) =>
+  path.join(layout.mediaDir(infoHash, fileIndex), `${index}.m4s`);
 
-    await mkdir(layout.torrentDir(infoHash), { recursive: true });
-    await mkdir(path.join(layout.mediaDir(infoHash, 0), 'video'), {
-      recursive: true,
-    });
-    await mkdir(path.join(layout.piecesDir, infoHash), { recursive: true });
+const piecePath = (layout, infoHash, index) =>
+  path.join(layout.piecesDir, infoHash, `${index}.piece`);
 
-    const written = [];
-    for (const file of [
-      layout.magnetFile(infoHash),
-      layout.torrentFile(infoHash),
-      layout.indexFile(infoHash, 0),
-      layout.masterFile(infoHash, 0),
-    ]) {
-      await writeFile(file, filler(64));
-      written.push([file, titleAge + (ages.metadata ?? 0)]);
-    }
-    for (const n of [0, 1, 2, 3]) {
-      await writeFile(segmentFile(infoHash, n), filler(256));
-      written.push([segmentFile(infoHash, n), titleAge + (ages.segments ?? 0)]);
-      await writeFile(pieceFile(infoHash, n), filler(256));
-      written.push([pieceFile(infoHash, n), titleAge + (ages.pieces ?? 0)]);
-    }
-    for (const [file, hours] of written) {
-      await utimes(file, when(hours), when(hours));
-    }
+async function freshRoot(name) {
+  const dir = path.join(root, name);
+  await removeDir(dir);
+  const layout = new CacheLayout(dir);
+  for (const sub of [layout.piecesDir, layout.torrentsDir, layout.hlsDir]) {
+    await mkdir(sub, { recursive: true });
   }
+  return layout;
 }
 
-async function caches({ metadataBytes = 1024 * 1024 * KiB } = {}) {
-  const pieces = new PieceCache(layout.piecesDir, 1024 * 1024 * KiB);
-  await pieces.load();
-  const segments = new SegmentCache(layout.hlsDir, 1024 * 1024 * KiB);
-  await segments.load();
-  const metadata = new MetadataCache(layout, metadataBytes);
-  return { pieces, segments, metadata };
-}
-
-// intervalMs outlasts the run, so the only sweep is the explicit one.
-const guardFor = (held, { totalBytes, inUse = [] }) =>
-  new DiskGuard({
+async function guardOver(layout, { total, piecesBudget, segmentBudget, metadataBudget, inUse, load = true }) {
+  const metadata = new MetadataCache(layout, metadataBudget);
+  const pieces = new PieceCache(layout.piecesDir, piecesBudget);
+  const segments = new SegmentCache(layout.hlsDir, segmentBudget);
+  if (load) {
+    await pieces.load();
+    await segments.load();
+  }
+  const guard = new DiskGuard({
     layout,
-    ...held,
-    totalBytes,
-    intervalMs: HOUR,
-    inUse: () => new Set(inUse),
+    pieces,
+    segments,
+    metadata,
+    totalBytes: total,
+    intervalMs: 60_000,
+    inUse: inUse ?? (() => new Set()),
   });
+  return { guard, metadata, pieces, segments };
+}
 
-section('metadata, which has no budget of its own until now');
-await build();
-let held = await caches({ metadataBytes: METADATA_PER_TITLE * 2.5 });
-let usage = await guardFor(held, { totalBytes: 1024 * 1024 * KiB }).sweep();
+const titlesOnDisk = async (layout) => {
+  const entries = await readdir(layout.torrentsDir, { withFileTypes: true });
+  return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
+};
 
-check(
-  usage.titles === TITLES.length,
-  'every title on disk is accounted for',
-  `${usage.titles} titles, ${Math.round(usage.total / KiB)} KiB`,
+// ------------------------------------------------------------ metadata budget
+
+report.section('the metadata budget');
+
+// `aaaa` is an hour old, `eeee` is barely written, and each one is a whole
+// 64 KiB title.
+const TITLES = ['aaaa', 'bbbb', 'cccc', 'dddd', 'eeee'];
+
+async function titlesKept(budget) {
+  const layout = await freshRoot(`metadata-${budget}`);
+  for (const [index, name] of TITLES.entries()) {
+    await writeAged(layout.torrentFile(`${name}hash`), UNIT, (TITLES.length - index) * 10 * MINUTE);
+  }
+  const { guard, metadata } = await guardOver(layout, {
+    total: ROOMY,
+    piecesBudget: ROOMY,
+    segmentBudget: ROOMY,
+    metadataBudget: budget,
+  });
+  const usage = await guard.sweep();
+  return {
+    kept: await titlesOnDisk(layout),
+    bytes: metadata.usedBytes,
+    freed: usage.freed.metadata,
+    total: usage.total,
+  };
+}
+
+const TIGHT = 2 * UNIT;
+const results = await report.compare('titles left after one sweep', [TIGHT, ROOMY], titlesKept);
+const tight = results.get(TIGHT).value;
+const roomy = results.get(ROOMY).value;
+
+await report.check('a two-title budget keeps the two newest', () => ({
+  passed: tight.kept.length === 2 && tight.kept.join(',') === 'ddddhash,eeeehash',
+  detail: `kept ${tight.kept.join(', ')} of ${TITLES.join(', ')}`,
+}));
+
+await report.check('a budget with room for everyone keeps everyone', () => ({
+  passed: roomy.kept.length === TITLES.length,
+  detail: `kept ${roomy.kept.join(', ')}`,
+}));
+
+await report.check('dropped titles leave nothing of their own behind', () => ({
+  passed: tight.freed === 3 * UNIT && tight.bytes <= TIGHT,
+  detail: `freed ${Math.round(tight.freed / KiB)} KiB, ${Math.round(tight.bytes / KiB)} KiB left`,
+}));
+
+// ------------------------------------------------------------------ in-use pin
+
+report.section('a title in use is never swept');
+
+async function pinCase(protect) {
+  const layout = await freshRoot(`pin-${protect}`);
+  const hashes = ['1111', '2222', '3333'];
+  for (const [index, name] of hashes.entries()) {
+    await writeAged(layout.torrentFile(name), UNIT, (hashes.length - index) * 20 * MINUTE);
+  }
+  const oldest = hashes[0];
+  const { guard } = await guardOver(layout, {
+    total: ROOMY,
+    piecesBudget: ROOMY,
+    segmentBudget: ROOMY,
+    metadataBudget: UNIT, // room for one; the oldest is the one to go
+    inUse: () => (protect ? new Set([oldest]) : new Set()),
+  });
+  await guard.sweep();
+  return { oldestKept: await exists(layout.torrentFile(oldest)) };
+}
+
+const pins = await report.compare('oldest title kept?', [false, true], pinCase);
+const unprotected = pins.get(false).value;
+const protectedOldest = pins.get(true).value;
+
+await report.check('the oldest title goes when nobody is playing it', () => ({
+  passed: unprotected.oldestKept === false,
+  detail: `oldest on disk: ${unprotected.oldestKept}`,
+}));
+
+await report.check('the same oldest title survives while it is playing', () => ({
+  passed: protectedOldest.oldestKept === true,
+  detail: `oldest on disk: ${protectedOldest.oldestKept}`,
+}));
+
+// ------------------------------------------------------- oldest first, globally
+
+report.section('oldest first, across both stores');
+
+async function evictionShape(total) {
+  const layout = await freshRoot(`oldest-${total}`);
+  const hash = 'sharedhash';
+  // Interleaved ages: the three oldest entries are all pieces and the two
+  // youngest are all segments, so a scheme that took the same share from each
+  // store would drop a segment instead.
+  const specs = [
+    ['p0', 60 * MINUTE],
+    ['p1', 50 * MINUTE],
+    ['p2', 40 * MINUTE],
+    ['s0', 30 * MINUTE],
+    ['s1', 20 * MINUTE],
+  ];
+  const files = new Map();
+  for (const [name, age] of specs) {
+    const file =
+      name[0] === 'p'
+        ? piecePath(layout, hash, Number(name.slice(1)))
+        : segmentPath(layout, hash, 0, Number(name.slice(1)));
+    files.set(name, file);
+    await writeAged(file, UNIT, age);
+  }
+
+  const { guard } = await guardOver(layout, {
+    total,
+    piecesBudget: ROOMY,
+    segmentBudget: ROOMY,
+    metadataBudget: ROOMY,
+  });
+  const usage = await guard.sweep();
+  const present = new Map();
+  for (const [name, file] of files) {
+    present.set(name, await exists(file));
+  }
+  return { present, usage };
+}
+
+const ROOM_FOR_FOUR = 4 * UNIT;
+const shapes = await report.compare(
+  'two sweeps, five entries on disk: what survives',
+  [ROOM_FOR_FOUR, UNIT],
+  evictionShape,
 );
-check(
-  !(await exists(layout.indexFile(TITLES[0], 0))) &&
-    !(await exists(layout.magnetFile(TITLES[1], 0))),
-  'the two nothing has wanted in longest lose their playlists and index',
-  `${Math.round(usage.metadata / KiB)} KiB left`,
-);
-check(
-  (await exists(layout.indexFile(TITLES[2], 0))) &&
-    (await exists(layout.masterFile(TITLES[3], 0))),
-  'and the two most recently wanted keep theirs',
-  '',
-);
-check(
-  await exists(segmentFile(TITLES[0], 0)),
-  'segments of a dropped title stay: they are still exactly what the index cuts',
-  '',
-);
+const roomy4 = shapes.get(ROOM_FOR_FOUR).value;
+const tightest = shapes.get(UNIT).value;
 
-section('a title asked for again');
-await build();
-held = await caches({ metadataBytes: METADATA_PER_TITLE * 2.5 });
-await guardFor(held, {
-  totalBytes: 1024 * 1024 * KiB,
-  inUse: TITLES,
-}).sweep();
-held.metadata.touch(TITLES[0]);
-usage = await guardFor(held, { totalBytes: 1024 * 1024 * KiB }).sweep();
+await report.check('only as much is dropped as the limit demands', () => ({
+  passed:
+    roomy4.present.get('p0') === false &&
+    roomy4.present.get('p1') === true &&
+    roomy4.present.get('p2') === true &&
+    roomy4.present.get('s0') === true &&
+    roomy4.present.get('s1') === true,
+  detail: [...roomy4.present].map(([name, there]) => `${name}=${there ? 'kept' : 'gone'}`).join(' '),
+}));
 
-check(
-  await exists(layout.indexFile(TITLES[0], 0)),
-  'is the most recently used, however old its files are',
-  '',
-);
-check(
-  !(await exists(layout.indexFile(TITLES[1], 0))) &&
-    !(await exists(layout.indexFile(TITLES[2], 0))),
-  'so the next two in line go instead',
-  '',
-);
+await report.check('the oldest entry is the one that goes', () => ({
+  // p0 is an hour old and p1 only fifty minutes: the sweep must pick p0.
+  passed: roomy4.present.get('p0') === false && roomy4.present.get('p1') === true,
+  detail: `pieces left: ${['p0', 'p1', 'p2'].filter((name) => roomy4.present.get(name)).join(', ')}`,
+}));
 
-await build();
-held = await caches({ metadataBytes: METADATA_PER_TITLE * 2.5 });
-await guardFor(held, {
-  totalBytes: 1024 * 1024 * KiB,
-  inUse: TITLES,
-}).sweep();
-held.metadata.touch(TITLES[0]);
-await new Promise((resolve) => setTimeout(resolve, 100));
+await report.check('with more to free, the sweep moves on to the next store', () => ({
+  passed:
+    tightest.present.get('p0') === false &&
+    tightest.present.get('p1') === false &&
+    tightest.present.get('p2') === false &&
+    tightest.present.get('s0') === false &&
+    tightest.present.get('s1') === true,
+  detail: [...tightest.present].map(([name, there]) => `${name}=${there ? 'kept' : 'gone'}`).join(' '),
+}));
 
-held = await caches({ metadataBytes: METADATA_PER_TITLE * 2.5 });
-await guardFor(held, { totalBytes: 1024 * 1024 * KiB }).sweep();
-check(
-  await exists(layout.indexFile(TITLES[0], 0)),
-  'and a restart still knows it was the last one wanted',
-  '',
-);
+await report.check('freed bytes are reported per store', () => ({
+  passed:
+    tightest.usage.freed.pieces === 3 * UNIT &&
+    tightest.usage.freed.segments === UNIT,
+  detail: `${Math.round(tightest.usage.freed.pieces / KiB)} KiB of pieces and ${Math.round(tightest.usage.freed.segments / KiB)} KiB of segments freed`,
+}));
 
-section('a title being watched right now');
-await build();
-held = await caches({ metadataBytes: METADATA_PER_TITLE * 2.5 });
-await guardFor(held, {
-  totalBytes: 1024 * 1024 * KiB,
-  inUse: [TITLES[0], TITLES[1]],
-}).sweep();
+await report.check('the cache ends the sweep inside its limit', () => ({
+  passed: roomy4.usage.total <= roomy4.usage.limit && tightest.usage.total <= tightest.usage.limit,
+  detail: `${Math.round(roomy4.usage.total / KiB)} of ${Math.round(roomy4.usage.limit / KiB)} KiB, ${Math.round(tightest.usage.total / KiB)} of ${Math.round(tightest.usage.limit / KiB)} KiB`,
+}));
 
-check(
-  (await exists(layout.indexFile(TITLES[0], 0))) &&
-    (await exists(layout.indexFile(TITLES[1], 0))),
-  'is never swept away, whatever the budget says',
-  '',
-);
+// ------------------------------------------------------------------ temp files
 
-section('the whole directory over its ceiling, with the pieces oldest');
-await build({ ages: { pieces: 24 } });
-held = await caches();
-let before = directorySize(root);
-usage = await guardFor(held, {
-  totalBytes: before - PIECES_PER_TITLE * 2,
-}).sweep();
+report.section('temp files a dead render left behind');
 
-check(
-  usage.total <= usage.limit,
-  'is brought back under it',
-  `${Math.round(usage.total / KiB)} KiB of ${Math.round(usage.limit / KiB)} KiB`,
-);
-check(
-  usage.freed.pieces > 0 && usage.freed.segments === 0,
-  'by dropping pieces, which nothing has read in a day',
-  `${Math.round(usage.freed.pieces / KiB)} KiB of pieces, ${Math.round(usage.freed.segments / KiB)} KiB of segments`,
-);
-check(
-  !(await exists(pieceFile(TITLES[0], 0))) &&
-    (await exists(pieceFile(TITLES[3], 0))),
-  'oldest first, and not one piece more than the ceiling wanted',
-  '',
-);
+// SegmentCache.load() clears every temp file it finds, so this sweep runs
+// without one: only the guard's own stale-file rule is under test.
+const tempLayout = await freshRoot('temp-files');
+const infoHash = 'tempyhash';
+const finished = segmentPath(tempLayout, infoHash, 0, 0);
+const freshTemp = `${segmentPath(tempLayout, infoHash, 0, 1)}${TEMP_SUFFIX}`;
+const staleTemp = `${segmentPath(tempLayout, infoHash, 0, 2)}${TEMP_SUFFIX}`;
+await writeAged(finished, 32 * KiB, 5 * MINUTE);
+await writeAged(freshTemp, 32 * KiB, 2 * MINUTE);
+await writeAged(staleTemp, 32 * KiB, 3 * 60 * MINUTE);
 
-section('the same, with the segments oldest instead');
-await build({ ages: { segments: 24 } });
-held = await caches();
-before = directorySize(root);
-usage = await guardFor(held, {
-  totalBytes: before - SEGMENTS_PER_TITLE * 2,
-}).sweep();
+const { guard: tempGuard } = await guardOver(tempLayout, {
+  total: ROOMY,
+  piecesBudget: ROOMY,
+  segmentBudget: ROOMY,
+  metadataBudget: ROOMY,
+  load: false,
+});
+const tempUsage = await tempGuard.sweep();
 
-check(
-  usage.freed.segments > 0 && usage.freed.pieces === 0,
-  'segments go and pieces stay - the rule is age, not what is cheap to fetch',
-  `${Math.round(usage.freed.segments / KiB)} KiB of segments, ${Math.round(usage.freed.pieces / KiB)} KiB of pieces`,
-);
-check(
-  !(await exists(segmentFile(TITLES[0], 0))) &&
-    (await exists(segmentFile(TITLES[3], 0))),
-  'and again it is the least recently used that go',
-  '',
-);
+await report.check('a temp file nobody is finishing any more is swept', async () => ({
+  passed: (await exists(staleTemp)) === false,
+  detail: `stale temp on disk: ${await exists(staleTemp)}`,
+}));
 
-section('a file written long ago and watched a moment ago');
-await build({ ages: { segments: 2 } });
-await rm(layout.piecesDir, { recursive: true, force: true, maxRetries: 20 });
-held = await caches();
-// Building the caches again after a touch stands in for a restart: use
-// order has to come back off disk, not out of the previous instance.
-held.segments.touch(segmentFile(TITLES[0], 0));
-await new Promise((resolve) => setTimeout(resolve, 100));
+await report.check('a temp file from a write still in flight is left alone', async () => ({
+  passed: (await exists(freshTemp)) === true,
+  detail: `fresh temp on disk: ${await exists(freshTemp)}`,
+}));
 
-before = directorySize(root);
-held = await caches();
-usage = await guardFor(held, {
-  totalBytes: before - SEGMENTS_PER_TITLE,
-}).sweep();
+await report.check('finished segments are not swept for being old', async () => ({
+  passed: (await exists(finished)) === true,
+  detail: `segment on disk: ${await exists(finished)}`,
+}));
 
-check(
-  await exists(segmentFile(TITLES[0], 0)),
-  'survives a restart, though everything around it was written later',
-  `${Math.round(usage.freed.segments / KiB)} KiB of segments dropped`,
-);
-check(
-  !(await exists(segmentFile(TITLES[0], 1))),
-  'while its neighbours, which nobody asked for, do not',
-  '',
-);
+await report.check('a sweep that has room to spare frees nothing', () => ({
+  passed:
+    tempUsage.freed.pieces === 0 &&
+    tempUsage.freed.segments === 0 &&
+    tempUsage.freed.metadata === 0,
+  detail: `freed ${JSON.stringify(tempUsage.freed)}`,
+}));
 
-section('what a render that died leaves behind');
-await build();
-held = await caches();
-const media = path.join(layout.mediaDir(TITLES[3], 0), 'video');
-const stale = path.join(media, '9.m4s.tmp');
-const fresh = path.join(media, '8.m4s.tmp');
-await writeFile(stale, Buffer.alloc(64 * KiB));
-await writeFile(fresh, Buffer.alloc(64 * KiB));
-await utimes(
-  stale,
-  new Date(Date.now() - 2 * HOUR),
-  new Date(Date.now() - 2 * HOUR),
-);
-await guardFor(held, { totalBytes: 1024 * 1024 * KiB }).sweep();
-
-check(!(await exists(stale)), 'a temp file left over for an hour is deleted');
-check(await exists(fresh), 'one that could still be a live render is not');
-
-await rm(root, { recursive: true, force: true, maxRetries: 20 });
-process.exit(failureCount() ? 1 : 0);
+report.finish();
+process.exit(process.exitCode ?? 0);

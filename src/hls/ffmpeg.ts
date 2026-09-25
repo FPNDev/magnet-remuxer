@@ -121,7 +121,7 @@ export class FfmpegSupervisor {
       if (failure) {
         throw failure;
       }
-      if (code !== 0) {
+      if (code !== 0 && code !== null) {
         throw new FfmpegError(`ffmpeg exited with code ${code}`, stderr);
       }
     } finally {

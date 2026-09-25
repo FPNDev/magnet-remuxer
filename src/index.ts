@@ -55,7 +55,9 @@ async function main(): Promise<void> {
   });
   const queue = new TaskQueue(
     config.maxConcurrentJobs,
-    config.maxJobsPerTorrent,
+    config.keepWarmS
+      ? Math.max(config.segmentDuration + 1, config.keepWarmS)
+      : 0,
   );
   const remuxer = new Remuxer({
     ffmpegPath: config.ffmpegPath,
@@ -72,10 +74,9 @@ async function main(): Promise<void> {
     queue,
     remuxer,
     segmentDuration: config.segmentDuration,
-    prefetchSegments: config.prefetchSegments,
+    keepWarm: !!config.keepWarmS,
     warmSegments: config.warmSegments,
     warmConcurrency: config.warmConcurrency,
-    prefetchAheadBytes: config.prefetchAheadBytes,
     requestTimeoutMs: config.requestTimeoutMs,
     readStallMs: config.readStallMs,
   });

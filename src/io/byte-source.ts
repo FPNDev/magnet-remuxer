@@ -1,5 +1,4 @@
 import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 
 /** Random-access reader over a fixed-length byte range. */
@@ -31,11 +30,6 @@ export async function readRange(
 }
 
 export class LocalFileSource implements ByteSource {
-  static async open(path: string): Promise<LocalFileSource> {
-    const { size } = await stat(path);
-    return new LocalFileSource(path, size);
-  }
-
   private constructor(
     readonly path: string,
     readonly length: number,

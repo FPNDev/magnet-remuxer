@@ -58,11 +58,10 @@ export class SegmentCache {
     });
   }
 
-  async added(file: string): Promise<number> {
+  async added(file: string): Promise<void> {
     const { size } = await stat(file);
     this.lru.set(file, size);
     await this.trim();
-    return size;
   }
 
   touch(file: string): void {

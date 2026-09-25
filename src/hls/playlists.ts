@@ -251,7 +251,7 @@ function uniqueLabel(track: MkvTrack, used: Map<string, number>): string {
       label = undefined;
     }
   }
-  label ||= `Track`;
+  label ||= `Unknown`;
 
   const usedTimes = (used.get(label) ?? 0) + 1;
   if (usedTimes > 1) {

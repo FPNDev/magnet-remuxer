@@ -15,7 +15,7 @@ import {
 const TICK_MS = 1000;
 // Dropping is rate limited. Churning a whole swarm at once costs more
 // throughput than the dead connections do.
-const MAX_PER_TICK = 5;
+const MAX_PER_TICK = 1;
 // A wire that has not sent its bitfield yet looks like it holds nothing.
 const BITFIELD_SETTLE_MS = 1500;
 // A dropped peer is banned for this long, so the tracker or DHT does not

@@ -1,328 +1,638 @@
-import { existsSync, rmSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
+// The HTTP surface of a running server. Rejected requests first - a missing
+// magnet, a value that is not a magnet, a title the server was never handed,
+// a path under a title that does not exist - then one cold play from the
+// master playlist down to a subtitle cue, four viewers asking for the same
+// cold segment at once, and what is still served once the server is restarted
+// over the same cache with the swarm gone.
+//
+//   node test/e2e.mjs
+
+import crypto from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
-  check,
-  directorySize,
-  failureCount,
-  fixturesDir,
-  get,
-  packetCount,
-  packets,
-  section,
-  seedFixture,
-  startServer,
-  summarize,
-  workDir,
+  cacheRoot,
+  ensureFixtures,
+  fileSize,
+  fixtures,
+  infoHashOf,
+  playlistOf,
+  reporter,
+  resolveBinaries,
+  seed,
+  sleep,
+  suitePort,
+  TestServer,
+  waitFor,
 } from './lib.mjs';
 
-const fixture = path.join(fixturesDir, 'movie.mkv');
-const out = path.join(workDir, 'e2e');
-const cacheA = path.join(workDir, 'e2e-cache-a');
-const cacheB = path.join(workDir, 'e2e-cache-b');
-const basePort = Number(process.env.TEST_PORT ?? 3901);
+const CACHE_DIR = `${cacheRoot}/e2e`;
+const MASTER_TYPE = 'application/vnd.apple.mpegurl';
+const FILE_LIST_CACHE = 'public, max-age=86400';
+const VIEWERS = 4;
+const COLD_SEGMENT = 6;
 
-rmSync(out, { recursive: true, force: true });
-rmSync(cacheA, { recursive: true, force: true });
-rmSync(cacheB, { recursive: true, force: true });
-await mkdir(out, { recursive: true });
+await resolveBinaries();
+await ensureFixtures();
 
-const { client: seeder, torrent: seeded, magnet } = await seedFixture(fixture);
-const encoded = encodeURIComponent(magnet);
+const report = reporter('e2e');
+const server = await TestServer.start({
+  name: 'e2e',
+  port: suitePort(0),
+  cacheDir: CACHE_DIR
+});
+const seeded = await seed(fixtures.movie());
+const encoded = `magnet=${encodeURIComponent(seeded.magnet)}`;
 
-const parseMaster = (text, base) => ({
-  media: [...text.matchAll(/#EXT-X-MEDIA:(.*)/g)].map(([, attributes]) => ({
-    type: /TYPE=(\w+)/.exec(attributes)[1],
-    name: /NAME="([^"]*)"/.exec(attributes)[1],
-    uri: new URL(/URI="([^"]*)"/.exec(attributes)[1], base).href,
-    isDefault: /DEFAULT=YES/.test(attributes),
-  })),
-  video: new URL(text.trim().split('\n').at(-1), base).href,
+/** The attribute list after an HLS tag. Both quoting styles are accepted. */
+function attributes(text) {
+  const found = {};
+  for (const match of text.matchAll(/([A-Z0-9-]+)=("([^"]*)"|[^,]*)/gi)) {
+    found[match[1]] = match[3] ?? match[2];
+  }
+  return found;
+}
+
+/**
+ * The EXT-X-MEDIA lines, which carry the audio, subtitle and video groups.
+ * playlistOf() reads stream infos and segment URIs but leaves these alone.
+ */
+function mediaGroups(text) {
+  const groups = [];
+  for (const line of text.split(/\r?\n/)) {
+    if (line.startsWith('#EXT-X-MEDIA:')) {
+      groups.push(attributes(line.slice('#EXT-X-MEDIA:'.length)));
+    }
+  }
+  return groups;
+}
+
+/** An fMP4 init section opens with a file type box. */
+function isInit(bytes) {
+  return bytes.length >= 8 && bytes.toString('latin1', 4, 8) === 'ftyp';
+}
+
+/** A rendered fMP4 segment opens with a movie fragment box. */
+function isFragment(bytes) {
+  return bytes.length >= 8 && bytes.toString('latin1', 4, 8) === 'moof';
+}
+
+/** What the app promises: a failure is JSON with one "error" string in it. */
+function hasErrorShape(response) {
+  let body;
+  try {
+    body = response.json();
+  } catch {
+    return false;
+  }
+  return (
+    Object.keys(body).length === 1 &&
+    typeof body.error === 'string' &&
+    body.error.length > 0
+  );
+}
+
+/** Log lines written after the byte offset, so a restart can be read alone. */
+async function logSince(target, offset) {
+  const text = await readFile(target.logPath, 'utf8').catch(() => '');
+  return text.slice(offset);
+}
+
+/** The "Rendered segment" records in a log slice, one per ffmpeg run. */
+function rendersIn(log) {
+  const renders = [];
+  for (const line of log.split('\n')) {
+    if (!line.includes('Rendered segment')) {
+      continue;
+    }
+    renders.push(JSON.parse(line.slice(line.indexOf('{'))));
+  }
+  return renders;
+}
+
+/** "<subject> → <status>" for every entry, or a fallback when none. */
+function statusLines(entries, subject) {
+  return entries
+    .map((entry) => `${subject(entry)} → ${entry.response.status}`)
+    .join(', ');
+}
+
+const failures = [];
+const rejected = [];
+for (const pathname of ['/m3u8', '/files', '/warm']) {
+  rejected.push({ pathname, response: await server.request(pathname) });
+}
+failures.push(...rejected.map((entry) => entry.response));
+
+const notMagnets = [
+  'not-a-magnet',
+  'http://example.com/movie.torrent',
+  'magnet:?dn=Movie',
+  'magnet:?xt=urn:btih:zzzz',
+];
+const badValues = [];
+for (const value of notMagnets) {
+  const response = await server.request(
+    `/files?magnet=${encodeURIComponent(value)}`,
+  );
+  badValues.push({ value, response });
+}
+failures.push(...badValues.map((entry) => entry.response));
+
+// A title only exists here once it has been handed over by magnet; until then
+// every path underneath its info hash is a stray one.
+const unseen = crypto.randomBytes(20).toString('hex');
+const unknownTitle = [];
+for (const pathname of [
+  `/${unseen}/0/video/index.m3u8`,
+  `/${unseen}/0/video/init.mp4`,
+  `/${unseen}/0/video/0.m4s`,
+  `/${unseen}/0/audio/1/init.mp4`,
+]) {
+  unknownTitle.push({ pathname, response: await server.request(pathname) });
+}
+failures.push(...unknownTitle.map((entry) => entry.response));
+
+report.section('rejected requests');
+
+await report.check('a request without a magnet is 400', async () => {
+  const wrong = rejected.filter((entry) => entry.response.status !== 400);
+  const all = rejected.map((entry) => `${entry.pathname} 400`);
+  const shown = statusLines(wrong, (entry) => entry.pathname);
+  return { passed: wrong.length === 0, detail: shown || all.join(', ') };
 });
 
-const parseMedia = (text, base) => {
-  if (!text.startsWith('#EXTM3U')) {
-    throw new Error(`not a playlist: ${text.slice(0, 200)}`);
-  }
-  const lines = text.trim().split('\n');
-  const init = /#EXT-X-MAP:URI="([^"]*)"/.exec(text)?.[1];
+await report.check('a value that is not a magnet is 400', async () => {
+  const wrong = badValues.filter((entry) => entry.response.status !== 400);
+  const shown = statusLines(wrong, (entry) => entry.value);
+  const count = `${notMagnets.length} values rejected with 400`;
+  return { passed: wrong.length === 0, detail: shown || count };
+});
+
+await report.check(
+  'a title the server has never been given is 404',
+  async () => {
+    const found = new Map(
+      unknownTitle.map((entry) => [entry.pathname, entry.response.status]),
+    );
+    const wrong = [...found].filter(([, status]) => status !== 404);
+    return {
+      passed: wrong.length === 0,
+      detail:
+        statusLines(wrong, (entry) => entry[0]) ||
+        `${found.size} paths under an unseen info hash answered 404`,
+    };
+  },
+);
+
+// The README says a magnet for a title the server has never seen is 404. The
+// /files and /m3u8 routes remember the magnet before they resolve it
+// (src/hls/hls-service.ts:138, 86), so such a title counts as seen from then
+// on and the request waits for metadata instead: that magnet answers 504 once
+// METADATA_TIMEOUT_S runs out, never 404. A note rather than a check,
+// because that is the app deciding.
+const ghost = crypto.randomBytes(20).toString('hex');
+const ghostResponse = await server.request(
+  `/files?magnet=${encodeURIComponent(`magnet:?xt=urn:btih:${ghost}`)}`,
+);
+report.note(
+  `a magnet that reaches nobody: /files answered ${ghostResponse.status} ` +
+    `(${ghostResponse.json().error}) rather than 404`,
+);
+
+report.section('a magnet that carries its own trackers');
+
+// A magnet URI keeps its trackers in the same query string the route reads, so
+// the route splits on & and hands everything but `file=` back to the magnet.
+// The tracker below is dead on purpose: the address in `x.pe` is the only
+// thing that can find the seeder.
+const bare =
+  `magnet=${seeded.torrent.magnetURI}` +
+  `&tr=http%3A%2F%2F127.0.0.1%3A1%2Fannounce` +
+  `&x.pe=127.0.0.1:${seeded.port}` +
+  `&file=0`;
+const bareResponse = await server.request(`/m3u8?${bare}`);
+const bareMaster = playlistOf(bareResponse.text);
+const bareUri = bareMaster.playlists[0]?.uri;
+
+await report.check(
+  'a bare magnet carrying its own trackers works',
+  async () => {
+    return {
+      passed:
+        bareResponse.status === 200 &&
+        bareResponse.headers.get('content-type') === MASTER_TYPE &&
+        bareMaster.streamInf &&
+        bareUri === `${seeded.infoHash}/0/video/index.m3u8`,
+      detail: `${bareResponse.status}, references ${bareUri}`,
+    };
+  },
+);
+
+const magnetFile = path.join(
+  CACHE_DIR,
+  'torrents',
+  seeded.infoHash,
+  'magnet.txt',
+);
+const storedMagnet = await readFile(magnetFile, 'utf8');
+const deadTracker = '&tr=http%3A%2F%2F127.0.0.1%3A1%2Fannounce';
+
+await report.check(
+  'the magnet keeps its trackers and never swallows file=',
+  async () => {
+    const ok =
+      storedMagnet.includes(deadTracker) &&
+      storedMagnet.includes(`&x.pe=127.0.0.1:${seeded.port}`) &&
+      !storedMagnet.includes('file=') &&
+      infoHashOf(storedMagnet) === seeded.infoHash;
+    return { passed: ok, detail: storedMagnet };
+  },
+);
+
+report.section('the file list');
+
+const fileListResponse = await server.request(`/files?${encoded}`);
+const fileList = fileListResponse.json();
+const playable = fileList.files.filter((file) => file.playable);
+
+await report.check('GET /files answers the title and its files', async () => {
+  const shape =
+    fileListResponse.status === 200 &&
+    fileList.infoHash === seeded.infoHash &&
+    typeof fileList.name === 'string' &&
+    fileList.name.length > 0 &&
+    Array.isArray(fileList.files) &&
+    fileList.files.length > 0 &&
+    fileList.files.every(
+      (file) =>
+        Number.isInteger(file.index) &&
+        typeof file.name === 'string' &&
+        file.name.length > 0 &&
+        typeof file.path === 'string' &&
+        file.path.length > 0 &&
+        Number.isInteger(file.length) &&
+        file.length > 0 &&
+        typeof file.playable === 'boolean',
+    );
   return {
-    init: init && new URL(init, base).href,
-    durations: lines
-      .filter((l) => l.startsWith('#EXTINF:'))
-      .map((l) => parseFloat(l.slice(8))),
-    segments: lines
-      .filter((l) => l && !l.startsWith('#'))
-      .map((l) => new URL(l, base).href),
-    target: Number(/TARGETDURATION:(\d+)/.exec(text)?.[1] ?? 0),
+    passed: shape && playable.length > 0,
+    detail:
+      `${fileList.name}: ${fileList.files.length} file(s), ` +
+      `${playable.length} playable`,
   };
-};
-
-// The init section plus every segment must decode as one stream: DTS never
-// goes backwards, and AAC frames stay exactly 1024 samples apart.
-async function verifyConcat(
-  label,
-  parts,
-  { expectedPackets, contiguousAac = false } = {},
-) {
-  const file = path.join(out, `${label.replace(/\W+/g, '_')}.mp4`);
-  await writeFile(file, Buffer.concat(parts));
-  const produced = await packets(file);
-
-  let regressions = 0;
-  let gaps = 0;
-  for (let i = 1; i < produced.length; i++) {
-    if (produced[i][1] <= produced[i - 1][1]) {
-      regressions++;
-    }
-    if (contiguousAac && produced[i][0] - produced[i - 1][0] !== 1024) {
-      gaps++;
-    }
-  }
-  const countOk =
-    expectedPackets === undefined || produced.length === expectedPackets;
-  check(
-    countOk && regressions === 0 && gaps === 0,
-    `${label} decodes continuously`,
-    `packets=${produced.length}${expectedPackets === undefined ? '' : `/${expectedPackets}`} dtsRegressions=${regressions}${contiguousAac ? ` aacGaps=${gaps}` : ''}`,
-  );
-}
-
-// The piece budget is smaller than the fixture, so pieces are evicted while
-// the run is still reading the file.
-section('server A - sequential playback, 8 MiB piece budget');
-let a = await startServer({
-  name: 'a',
-  port: basePort,
-  cacheDir: cacheA,
-  env: { PIECE_CACHE_MB: '8' },
 });
 
-check(
-  (await get(`${a.base}/m3u8`, false)).status === 400,
-  'missing magnet → 400',
-);
-check(
-  (await get(`${a.base}/m3u8?magnet=nonsense`, false)).status === 400,
-  'invalid magnet → 400',
-);
-check(
-  (await get(`${a.base}/${'ab'.repeat(20)}/0/video/index.m3u8`, false))
-    .status === 404,
-  'unknown info hash → 404',
+await report.check('the file list caches for a day', async () => {
+  const header = fileListResponse.headers.get('cache-control');
+  return { passed: header === FILE_LIST_CACHE, detail: header ?? 'absent' };
+});
+
+report.section('a cold master playlist');
+
+const masterResponse = await server.request(`/m3u8?${encoded}`);
+const masterText = masterResponse.text;
+const master = playlistOf(masterText);
+const groups = mediaGroups(masterText);
+const groupsOf = (type) => groups.filter((group) => group.TYPE === type);
+const stream = master.playlists[0];
+
+await report.check(
+  'the master playlist is HLS and lists its groups',
+  async () => {
+    const ok =
+      masterResponse.status === 200 &&
+      masterResponse.headers.get('content-type') === MASTER_TYPE &&
+      masterText.startsWith('#EXTM3U') &&
+      Number(stream.BANDWIDTH) > 0 &&
+      /^\d+x\d+$/.test(stream.RESOLUTION) &&
+      stream.AUDIO === 'audio' &&
+      stream.VIDEO === 'video' &&
+      stream.SUBTITLES === 'subs' &&
+      groupsOf('VIDEO').length === 1 &&
+      groupsOf('AUDIO').length > 0 &&
+      groupsOf('SUBTITLES').length > 0 &&
+      groupsOf('AUDIO').every((group) => group['GROUP-ID'] === 'audio') &&
+      groupsOf('SUBTITLES').every((group) => group['GROUP-ID'] === 'subs');
+    return {
+      passed: ok,
+      detail:
+        `${stream.BANDWIDTH} bps, ${stream.RESOLUTION}, ` +
+        `${groupsOf('AUDIO').length} audio, ` +
+        `${groupsOf('SUBTITLES').length} subtitles`,
+    };
+  },
 );
 
-const files = await get(`${a.base}/files?magnet=${encoded}`, false);
-check(
-  files.status === 200,
-  'lists the torrent files',
-  `${files.ms}ms ${files.body}`,
-);
-
-const master = await get(`${a.base}/m3u8?magnet=${encoded}`, false);
-check(
-  master.status === 200 && master.type.includes('mpegurl'),
-  'master playlist on a cold cache',
-  `${master.ms}ms`,
-);
-console.log(master.body);
-
-const { media, video } = parseMaster(master.body, `${a.base}/m3u8`);
-const playlists = {};
-for (const entry of [{ type: 'VIDEO', name: 'video', uri: video }, ...media]) {
-  const res = await get(entry.uri, false);
-  const parsed = parseMedia(res.body, entry.uri);
-  playlists[entry.name] = { ...entry, ...parsed };
-  const total = parsed.durations.reduce((sum, d) => sum + d, 0);
-  check(
-    res.status === 200,
-    `media playlist: ${entry.name}`,
-    `${res.ms}ms segments=${parsed.segments.length} total=${total.toFixed(3)}s target=${parsed.target}`,
-  );
+const referenced = [
+  ...new Set([...groups.map((group) => group.URI), stream.uri]),
+];
+const mediaPlaylists = [];
+for (const uri of referenced) {
+  mediaPlaylists.push({ uri, response: await server.request(`/${uri}`) });
 }
+const unresolved = mediaPlaylists.filter((entry) => {
+  const playlist = playlistOf(entry.response.text);
+  // Subtitle renditions are WebVTT and carry no init section, so only the
+  // audio and video playlists point at one.
+  const wantsMap = !entry.uri.includes('/subtitles/');
+  return (
+    entry.response.status !== 200 ||
+    entry.response.headers.get('content-type') !== MASTER_TYPE ||
+    playlist.segments.length === 0 ||
+    !playlist.endList ||
+    Boolean(playlist.map) !== wantsMap
+  );
+});
 
-const videoPlaylist = playlists.video;
-const defaultAudio = Object.values(playlists).find(
-  (p) => p.type === 'AUDIO' && p.isDefault,
-);
-const otherAudio = Object.values(playlists).find(
-  (p) => p.type === 'AUDIO' && !p.isDefault,
-);
-const subtitles = Object.values(playlists).filter(
-  (p) => p.type === 'SUBTITLES',
-);
-
-const videoInit = await get(videoPlaylist.init);
-const audioInit = await get(defaultAudio.init);
-check(
-  videoInit.status === 200 && audioInit.status === 200,
-  'init sections',
-  `video ${videoInit.ms}ms audio ${audioInit.ms}ms`,
-);
-
-const videoParts = [videoInit.body];
-const audioParts = [audioInit.body];
-const timings = { video: [], audio: [], subtitles: [] };
-let cues = 0;
-for (let n = 0; n < videoPlaylist.segments.length; n++) {
-  const [v, audio, text] = await Promise.all([
-    get(videoPlaylist.segments[n]),
-    get(defaultAudio.segments[n]),
-    get(subtitles[0].segments[n], false),
-  ]);
-  if (v.status !== 200 || audio.status !== 200 || text.status !== 200) {
-    check(
-      false,
-      `segment ${n}`,
-      `video=${v.status} audio=${audio.status} subtitles=${text.status}`,
+await report.check(
+  'every playlist the master references resolves',
+  async () => {
+    const shown = unresolved.map(
+      (entry) => `${entry.uri} → ${entry.response.status}`,
     );
-    continue;
-  }
-  videoParts.push(v.body);
-  audioParts.push(audio.body);
-  cues += (text.body.match(/-->/g) ?? []).length;
-  timings.video.push(v.ms);
-  timings.audio.push(audio.ms);
-  timings.subtitles.push(text.ms);
-}
-console.log(
-  `video ${summarize(timings.video)}; audio ${summarize(timings.audio)}; subtitles ${summarize(timings.subtitles)}`,
-);
-
-// Stream indexes in the fixture: 0 video, 1 default audio, 3 subtitles.
-await verifyConcat('A video', videoParts, {
-  expectedPackets: await packetCount(fixture, 0),
-});
-await verifyConcat('A default audio', audioParts, {
-  expectedPackets: await packetCount(fixture, 1),
-});
-check(
-  cues === (await packetCount(fixture, 3)),
-  'every subtitle cue is served exactly once',
-  `${cues} cues`,
-);
-
-check(
-  directorySize(path.join(cacheA, 'pieces')) <= 10 * 1024 * 1024,
-  'piece cache stays near its budget',
-  `${(directorySize(path.join(cacheA, 'pieces')) / 1048576).toFixed(1)} MiB on disk`,
-);
-
-const otherInit = await get(otherAudio.init);
-const otherParts = [otherInit.body];
-const otherTimings = [];
-let otherFailures = 0;
-for (const url of otherAudio.segments) {
-  const res = await get(url);
-  if (res.status !== 200) {
-    otherFailures++;
-  } else {
-    otherParts.push(res.body);
-  }
-  otherTimings.push(res.ms);
-}
-check(
-  otherFailures === 0,
-  'converted audio track after its pieces were evicted',
-  `${otherAudio.segments.length} segments, ${summarize(otherTimings)}`,
-);
-await verifyConcat('A converted audio', otherParts, { contiguousAac: true });
-
-console.log(`status: ${(await get(`${a.base}/status`, false)).body}`);
-
-section('server B - cold cache, seeking and concurrency');
-const b = await startServer({
-  name: 'b',
-  port: basePort + 1,
-  cacheDir: cacheB,
-});
-const onB = (url) => url.replace(a.base, b.base);
-
-const rawMaster = await get(`${b.base}/m3u8?magnet=${magnet}`, false);
-check(
-  rawMaster.status === 200,
-  'master playlist from an unencoded magnet link',
-  `${rawMaster.ms}ms`,
-);
-
-const bInit = (await get(onB(videoPlaylist.init))).body;
-const lastSegment = videoPlaylist.segments.length - 1;
-for (const n of [10, 3, lastSegment, 0]) {
-  const res = await get(onB(videoPlaylist.segments[n]));
-  const file = path.join(out, `seek-${n}.mp4`);
-  await writeFile(file, Buffer.concat([bInit, res.body]));
-  const count = res.status === 200 ? (await packets(file)).length : 0;
-  check(
-    res.status === 200 && count > 0,
-    `seek straight to video segment ${n}`,
-    `${res.ms}ms packets=${count}`,
-  );
-}
-
-const shared = onB(otherAudio.segments[7]);
-const clients = await Promise.all(Array.from({ length: 6 }, () => get(shared)));
-check(
-  clients.every((c) => c.status === 200 && c.body.equals(clients[0].body)),
-  'six clients requesting one segment get identical bytes',
-  clients.map((c) => `${c.ms}ms`).join(' '),
-);
-
-const mixed = await Promise.all(
-  [5, 6, 12, 13, 14].flatMap((n) => [
-    get(onB(videoPlaylist.segments[n])),
-    get(onB(defaultAudio.segments[n])),
-  ]),
-);
-check(
-  mixed.every((r) => r.status === 200),
-  'parallel requests across segments and renditions',
-  mixed.map((r) => `${r.ms}ms`).join(' '),
-);
-check(
-  existsSync(path.join(cacheB, 'hls', seeded.infoHash, '0', 'master.m3u8')),
-  'master playlist is cached on disk',
-);
-await b.stop();
-
-section('server A - restarted');
-await a.stop();
-a = await startServer({ name: 'a', port: basePort, cacheDir: cacheA });
-
-const warmMaster = await get(`${a.base}/m3u8?magnet=${encoded}`, false);
-check(
-  warmMaster.status === 200 && warmMaster.body === master.body,
-  'master served from disk after a restart',
-  `${warmMaster.ms}ms`,
-);
-
-const cachedSegment = await get(videoPlaylist.segments[4]);
-check(
-  cachedSegment.status === 200 && cachedSegment.body.equals(videoParts[5]),
-  'rendered segment served from disk',
-  `${cachedSegment.ms}ms`,
-);
-
-// Fixture cues sit at 1s and every 2s after. Pick a segment holding one
-// clear of both edges, so the rendered VTT cannot come out empty.
-const cueSegment = (() => {
-  let start = 0;
-  return subtitles[1].durations.findIndex((duration) => {
-    const end = start + duration;
-    const found = Array.from({ length: 60 }, (_, i) => 1 + i * 2).some(
-      (cue) => cue > start + 0.2 && cue < end - 0.2,
+    const counts = mediaPlaylists.map(
+      (entry) =>
+        `${entry.uri} ${playlistOf(entry.response.text).segments.length}`,
     );
-    start = end;
-    return found && start > 4;
-  });
+    return {
+      passed: unresolved.length === 0,
+      detail: shown.join(', ') || counts.join(', '),
+    };
+  },
+);
+
+report.section('init sections and segments');
+
+const videoInit = await server.request(`/${seeded.infoHash}/0/video/init.mp4`);
+const videoSegment = await server.request(`/${seeded.infoHash}/0/video/0.m4s`);
+const boxOf = (bytes) => bytes.toString('latin1', 4, 8);
+
+await report.check(
+  'the video init section and first segment are fMP4',
+  async () => {
+    const ok =
+      videoInit.status === 200 &&
+      videoInit.headers.get('content-type') === 'video/mp4' &&
+      isInit(videoInit.bytes) &&
+      videoSegment.status === 200 &&
+      videoSegment.headers.get('content-type') === 'video/mp4' &&
+      isFragment(videoSegment.bytes);
+    return {
+      passed: ok,
+      detail:
+        `init ${videoInit.bytes.length}B (${boxOf(videoInit.bytes)}), ` +
+        `segment ${videoSegment.bytes.length}B (${boxOf(videoSegment.bytes)})`,
+    };
+  },
+);
+
+const audioUris = groupsOf('AUDIO').map((group) => group.URI);
+const audioTracks = [];
+for (const uri of audioUris) {
+  const directory = uri.replace(/\/index\.m3u8$/, '');
+  const init = await server.request(`/${directory}/init.mp4`);
+  const segment = await server.request(`/${directory}/0.m4s`);
+  audioTracks.push({ uri, init, segment });
+}
+const brokenAudio = audioTracks.filter((track) => {
+  const type = (response) => response.headers.get('content-type');
+  return (
+    track.init.status !== 200 ||
+    type(track.init) !== 'audio/mp4' ||
+    !isInit(track.init.bytes) ||
+    track.segment.status !== 200 ||
+    type(track.segment) !== 'audio/mp4' ||
+    !isFragment(track.segment.bytes)
+  );
+});
+
+await report.check(
+  'every audio init section and first segment is fMP4',
+  async () => {
+    const shown = statusLines(brokenAudio, (track) => track.uri);
+    const listed = audioTracks.map(
+      (track) =>
+        `${track.uri} init ${track.init.bytes.length}B ` +
+        `segment ${track.segment.bytes.length}B`,
+    );
+    return {
+      passed: brokenAudio.length === 0,
+      detail: shown || listed.join('; '),
+    };
+  },
+);
+
+report.section('subtitle cues');
+
+const subtitleUri = groupsOf('SUBTITLES')[0].URI;
+const subtitleDirectory = subtitleUri.replace(/\/index\.m3u8$/, '');
+const subtitleIndex = await server.request(`/${subtitleUri}`);
+const cueList = playlistOf(subtitleIndex.text).segments;
+const cueBodies = [];
+for (const cue of cueList.slice(0, 8)) {
+  const response = await server.request(`/${subtitleDirectory}/${cue.uri}`);
+  cueBodies.push(response.text);
+}
+const spoken = cueBodies.filter((body) => body.includes('Cue '));
+const cues = cueBodies.join('\n');
+
+await report.check(
+  'the subtitle playlist and its cues are WebVTT',
+  async () => {
+    const ok =
+      subtitleIndex.status === 200 &&
+      subtitleIndex.headers.get('content-type') === MASTER_TYPE &&
+      cueList.length > 0 &&
+      cueList.every((cue) => cue.uri.endsWith('.vtt')) &&
+      spoken.length > 0 &&
+      cues.includes('Cue 1') &&
+      cues.includes('-->');
+    return {
+      passed: ok,
+      detail:
+        `${cueList.length} cues, ${spoken.length} of ${cueBodies.length} ` +
+        `fetched carry text; "Cue 1" ` +
+        `${cues.includes('Cue 1') ? 'present' : 'missing'}`,
+    };
+  },
+);
+
+report.section(`${VIEWERS} viewers, one cold segment`);
+// Nothing of ours may still be running when they arrive, or the queue
+// counters describe the earlier work rather than theirs.
+await waitFor(
+  async () => {
+    const status = await server.getJson('/status');
+    const idle = status.jobs.running === 0 && status.jobs.queued === 0;
+    return idle ? status : false;
+  },
+  { timeoutMs: 90_000, intervalMs: 200 },
+);
+
+const coldPath = `/${seeded.infoHash}/0/video/${COLD_SEGMENT}.m4s`;
+const logMark = await fileSize(server.logPath);
+const peak = { running: 0, queued: 0 };
+let sampling = true;
+
+// A segment render is tens of milliseconds here, so the samples have to come
+// faster than that to see it at all.
+const sampler = (async () => {
+  while (sampling) {
+    const status = await server.getJson('/status');
+    peak.running = Math.max(peak.running, status.jobs.running);
+    peak.queued = Math.max(peak.queued, status.jobs.queued);
+    await sleep(5);
+  }
 })();
-const freshSegment = await get(subtitles[1].segments[cueSegment], false);
-check(
-  freshSegment.status === 200 && freshSegment.body.includes('-->'),
-  'segment rendered after a restart, from saved torrent metadata',
-  `${freshSegment.ms}ms`,
-);
-await a.stop();
 
-seeder.destroy();
-process.exit(failureCount() ? 1 : 0);
+const waiting = [];
+for (let viewer = 0; viewer < VIEWERS; viewer++) {
+  waiting.push(server.request(coldPath));
+}
+const served = await Promise.all(waiting);
+sampling = false;
+await sampler;
+
+const firstView = served[0];
+const others = served.slice(1);
+const same = others.every((response) => response.bytes.equals(firstView.bytes));
+
+await sleep(300);
+const coldRenders = rendersIn(await logSince(server, logMark)).filter(
+  (render) => render.rendition === 'video' && render.n === COLD_SEGMENT,
+);
+const settled = await waitFor(
+  async () => {
+    const status = await server.getJson('/status');
+    const idle = status.jobs.running === 0 && status.jobs.queued === 0;
+    return idle ? status : false;
+  },
+  { timeoutMs: 30_000, intervalMs: 100 },
+);
+
+await report.check(
+  'identical concurrent requests share one render',
+  async () => {
+    return {
+      passed:
+        served.every((response) => response.status === 200) &&
+        firstView.bytes.length > 0 &&
+        same &&
+        coldRenders.length === 1 &&
+        peak.running <= 1 &&
+        peak.queued === 0,
+      detail:
+        `${VIEWERS} × 200, ${firstView.bytes.length}B, ` +
+        `byte-identical=${same}, renders=${coldRenders.length}, ` +
+        `peak queue running=${peak.running} queued=${peak.queued}`,
+    };
+  },
+);
+
+report.section('unknown and wandering paths');
+
+const strays = [
+  `/${seeded.infoHash}/0/bogus/thing`,
+  `/${seeded.infoHash}/0/video/../master.m3u8`,
+  `/${seeded.infoHash}/0/video/%2e%2e%2f%2e%2e%2fmaster.m3u8`,
+  `/${seeded.infoHash}/0/audio/1/init.mp4`,
+  `/${seeded.infoHash}/0/video/0.mp4`,
+  `/${seeded.infoHash}/0/video/9999.m4s`,
+  `/${seeded.infoHash}/0/subtitles/1/index.m3u8`,
+];
+const strayResponses = [];
+for (const pathname of strays) {
+  const response = await server.request(pathname);
+  strayResponses.push({ pathname, response });
+}
+failures.push(...strayResponses.map((entry) => entry.response));
+
+const isEscape = (entry) =>
+  entry.pathname.includes('..') || entry.pathname.toLowerCase().includes('%2e');
+const escapes = strayResponses.filter(isEscape);
+const leaked = escapes.filter(
+  (entry) =>
+    entry.response.status !== 404 || entry.response.text.includes('#EXTM3U'),
+);
+
+await report.check('an unknown path under a known title is 404', async () => {
+  const found = new Map(
+    strayResponses.map((entry) => [entry.pathname, entry.response.status]),
+  );
+  const wrong = [...found].filter(([, status]) => status !== 404);
+  return {
+    passed: wrong.length === 0,
+    detail:
+      statusLines(wrong, (entry) => entry[0]) ||
+      `${found.size} stray paths answered 404`,
+  };
+});
+
+await report.check('path traversal is rejected', async () => {
+  const shown = leaked.map(
+    (entry) => `${entry.pathname} → ${entry.response.status}`,
+  );
+  const summary =
+    `${escapes.length} traversal attempts answered 404, ` +
+    `none served a playlist`;
+  return {
+    passed: escapes.length > 0 && leaked.length === 0,
+    detail: shown.join(', ') || summary,
+  };
+});
+
+report.section('failures');
+
+await report.check('every failure answers {"error": "..."}', async () => {
+  const wrong = failures.filter((response) => !hasErrorShape(response));
+  return {
+    passed: failures.length > 0 && wrong.length === 0,
+    detail:
+      `${failures.length - wrong.length} of ${failures.length} failures ` +
+      `carry a single "error" string`,
+  };
+});
+
+report.section('a restart with the swarm gone');
+
+// The seeder is closing after this, so anything the second server serves has
+// to be on disk already.
+const masterBefore = masterResponse.text;
+const segmentBefore = await server.getBytes(
+  `/${seeded.infoHash}/0/video/0.m4s`,
+);
+
+await server.stop();
+await seeded.close();
+await server.restart({});
+
+const restartMark = await fileSize(server.logPath);
+const masterAfter = await server.request(`/m3u8?${encoded}`);
+const segmentAfter = await server.request(`/${seeded.infoHash}/0/video/0.m4s`);
+const restartRenders = rendersIn(await logSince(server, restartMark));
+const unchanged =
+  masterAfter.text === masterBefore && segmentAfter.bytes.equals(segmentBefore);
+
+await report.check(
+  'a restart still serves the playlists and a rendered segment',
+  async () => {
+    return {
+      passed:
+        masterAfter.status === 200 &&
+        segmentAfter.status === 200 &&
+        segmentAfter.bytes.length > 0 &&
+        unchanged &&
+        restartRenders.length === 0,
+      detail:
+        `master ${masterAfter.status}, segment ${segmentAfter.status} ` +
+        `${segmentAfter.bytes.length}B, identical=${unchanged}, ` +
+        `renders after restart=${restartRenders.length}`,
+    };
+  },
+);
+
+await server.stop();
+report.finish();
+process.exit(process.exitCode ?? 0);

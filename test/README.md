@@ -65,7 +65,7 @@ you need to move them.
 
 | Suite               | What it covers                                                                                                                                                                                                                              |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `queue.mjs`         | `TaskQueue` alone: background slots capped, a player preempting prefetch, cancellation on a seek, per-torrent share of the pool. No fixture, no ffmpeg.                                                                                     |
+| `queue.mjs`         | `TaskQueue` alone: background slots capped, a player preempting, cancellation on a seek. No fixture, no ffmpeg.                                                                                                                             |
 | `remux.mjs`         | Index, slice and remux one local file. Playlist duration against the source, segments starting where the playlist says, AAC frames contiguous across boundaries, channel counts, subtitle cues appearing once, packet timestamps unchanged. |
 | `audio-window.mjs`  | The byte window a converted audio segment reads. A tight read has to produce the same segment as a generous one and read less; a file with a keyframe cluster out of place has to be caught and read again.                                 |
 | `abort.mjs`         | Renders stopped part way through. Every aborted render settles and none is left running.                                                                                                                                                    |
@@ -88,6 +88,6 @@ These print numbers and exit 0. They prove nothing on their own.
 | Script            | Arguments                                                                                                                                                                         |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `bandwidth.mjs`   | seed rate in KiB/s, piece length in KiB, per-torrent job limits to compare. Plays through a capped seeder at each limit.                                                          |
-| `first-frame.mjs` | seed rate in KiB/s, piece length in KiB, variants as `name=entry:segmentSeconds:prefetch`. With no variants it measures `dist/` against an earlier build left in `dist-before/`.  |
+| `first-frame.mjs` | seed rate in KiB/s, piece length in KiB, variants as `name=entry:segmentSeconds`. With no variants it measures `dist/` against an earlier build left in `dist-before/`.           |
 | `swarm.mjs`       | a magnet, a repeat count, variants as `name=ENV=VALUE,...`. Measures startup and seeks against a real swarm.                                                                      |
 | `inspect.mjs`     | a magnet or file path, a file index or `-`, a comma-separated segment list, and `--remux` to render them. Prints tracks, renditions, keyframe slices and a block tally per slice. |

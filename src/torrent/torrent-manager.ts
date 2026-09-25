@@ -15,6 +15,7 @@ import { PeerMemory } from './peer-memory.js';
 import type { AdoptableTorrent, PieceCache } from './piece-store.js';
 import { asSwarmTorrent, type SwarmWire } from './swarm-internals.js';
 import { TailHedge, type TailHedgeOptions } from './tail-hedge.js';
+import { PUBLIC_TRACKERS } from './public-trackers.js';
 
 export interface TorrentFileInfo {
   index: number;
@@ -78,7 +79,7 @@ export class TorrentManager {
   }
 
   remember(infoHash: string, magnet: string): Promise<void> {
-    return this.flights.run(`remember:${infoHash}`, async () => {
+    return this.flights.run(`remember:${infoHash}`, undefined, async () => {
       const file = this.options.layout.magnetFile(infoHash);
       if (await exists(file)) {
         return;
@@ -87,7 +88,7 @@ export class TorrentManager {
         recursive: true,
       });
       await writeFileAtomic(file, magnet);
-    });
+    }).promise;
   }
 
   async info(infoHash: string): Promise<TorrentInfo> {
@@ -128,6 +129,7 @@ export class TorrentManager {
     this.lastUsed.set(infoHash, Date.now());
     try {
       const torrent = await this.get(infoHash);
+
       try {
         return await task(torrent);
       } finally {
@@ -246,9 +248,9 @@ export class TorrentManager {
         if (existing?.ready && !isDestroyed(existing)) {
           return existing;
         }
-        return await this.flights.run(`add:${infoHash}`, () =>
+        return await this.flights.run(`add:${infoHash}`, undefined, () =>
           this.add(infoHash),
-        );
+        ).promise;
       }
       throw new HttpError(503, `Torrent ${infoHash} is being removed`);
     } finally {
@@ -282,6 +284,11 @@ export class TorrentManager {
       infoHash,
       from: metadata ? 'saved metadata' : 'magnet',
     });
+
+    const trackers = magnet
+      ? new Set([...PUBLIC_TRACKERS, ...trackersOf(magnet)]).values().toArray()
+      : PUBLIC_TRACKERS;
+
     const torrent = this.client.add(metadata ?? magnet!, {
       store: pieces.createStore as unknown as NonNullable<
         TorrentOptions['store']
@@ -293,7 +300,7 @@ export class TorrentManager {
       // Cached pieces outlive the torrent, and webtorrent's own store cache
       // is off because PieceCache holds the bytes.
       destroyStoreOnDestroy: false,
-      announce: magnet ? trackersOf(magnet) : [],
+      announce: trackers,
     });
     torrent.setMaxListeners(MAX_TORRENT_LISTENERS);
     // The server reads and never seeds. Every peer is told we hold no piece,

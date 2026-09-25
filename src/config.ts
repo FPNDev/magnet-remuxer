@@ -54,16 +54,11 @@ export const config = {
   // Seconds per segment. Also the EXT-X-TARGETDURATION written into playlists,
   // so changing it invalidates playlists already on disk.
   segmentDuration: number('SEGMENT_DURATION', 2),
-  prefetchSegments: number('PREFETCH_SEGMENTS', 9),
+  keepWarmS: number('KEEP_WARM_S', 5),
   warmSegments: number('WARM_SEGMENTS', 2),
   warmConcurrency: Math.max(1, number('WARM_CONCURRENCY', 4)),
-  prefetchAheadBytes: number('PREFETCH_AHEAD_MB', 96) * MiB,
   requestTimeoutMs: number('REQUEST_TIMEOUT_S', 120) * 1000,
-  maxConcurrentJobs: number(
-    'MAX_CONCURRENT_JOBS',
-    Math.max(16, os.availableParallelism()),
-  ),
-  maxJobsPerTorrent: number('MAX_JOBS_PER_TORRENT', 2),
+  maxConcurrentJobs: number('MAX_CONCURRENT_JOBS', 64),
   jobTimeoutMs: number('JOB_TIMEOUT_S', 180) * 1000,
   readStallMs: number('READ_STALL_S', 45) * 1000,
 

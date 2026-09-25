@@ -13,11 +13,10 @@ import type {
 } from '../torrent/torrent-manager.js';
 import { untilAborted, withTimeout } from '../util/async.js';
 import { exists, readJson } from '../util/fs.js';
-import { SingleFlight } from '../util/single-flight.js';
+import { SingleFlight, type FlightResponse } from '../util/single-flight.js';
 import { Priority, type TaskQueue } from '../util/task-queue.js';
 import type { Asset } from './asset.js';
 import { AssetRegistry, MATROSKA_FILE } from './asset-registry.js';
-import { keyPrefix, Playheads } from './playhead.js';
 import { renditionPath, segmentFileName } from './playlists.js';
 import type { Remuxer } from './remux.js';
 import { WarmQueue } from './warm-queue.js';
@@ -31,10 +30,9 @@ export interface HlsServiceOptions {
   remuxer: Remuxer;
   queue: TaskQueue;
   segmentDuration: number;
-  prefetchSegments: number;
+  keepWarm: boolean;
   warmSegments: number;
   warmConcurrency: number;
-  prefetchAheadBytes: number;
   requestTimeoutMs: number;
   readStallMs: number;
 }
@@ -58,16 +56,11 @@ const MEDIA_CACHE = 'public, max-age=86400';
  * and resolving one media path to a file on disk.
  */
 export class HlsService {
-  private readonly playheads: Playheads;
   private readonly registry: AssetRegistry;
   private readonly warming: WarmQueue;
   private readonly flights = new SingleFlight();
 
   constructor(private readonly options: HlsServiceOptions) {
-    this.playheads = new Playheads({
-      autoExpire: true,
-      onIdle: (dir) => this.dropOrphanedPrefetch(dir),
-    });
     this.registry = new AssetRegistry({
       layout: options.layout,
       torrents: options.torrents,
@@ -75,11 +68,9 @@ export class HlsService {
       segments: options.segments,
       remuxer: options.remuxer,
       queue: options.queue,
-      playheads: this.playheads,
       segmentDuration: options.segmentDuration,
-      prefetchSegments: options.prefetchSegments,
-      prefetchAheadBytes: options.prefetchAheadBytes,
       readStallMs: options.readStallMs,
+      warmSegments: options.warmSegments,
     });
     this.warming = new WarmQueue({
       concurrency: options.warmConcurrency,
@@ -96,7 +87,6 @@ export class HlsService {
     const infoHash = parseInfoHash(magnet);
     await torrents.remember(infoHash, magnet);
     metadata.touch(infoHash);
-    torrents.warm(infoHash);
 
     const fileIndex =
       fileParam === undefined
@@ -105,9 +95,17 @@ export class HlsService {
     const file = layout.masterFile(infoHash, fileIndex);
 
     if (!(await exists(file))) {
+      const indexKey = AssetRegistry.indexKey(infoHash, fileIndex);
       await this.orTimeout(
-        this.awaited(AssetRegistry.indexKey(infoHash, fileIndex), signal, () =>
-          this.publish(infoHash, fileIndex),
+        this.awaited(indexKey, () =>
+          this.flights.run(indexKey, signal, () => {
+            return this.publish(
+              infoHash,
+              fileIndex,
+              Priority.Foreground,
+              signal,
+            );
+          }),
         ),
         `the playlists for ${infoHash}/${fileIndex}`,
       );
@@ -142,11 +140,11 @@ export class HlsService {
     const infoHash = parseInfoHash(magnet);
     await torrents.remember(infoHash, magnet);
     metadata.touch(infoHash);
-    torrents.warm(infoHash);
+
     const key = `info:${infoHash}`;
     const info = await this.orTimeout(
-      this.awaited(key, signal, () =>
-        this.flights.run(key, () => torrents.info(infoHash)),
+      this.awaited(key, () =>
+        this.flights.run(key, signal, () => torrents.info(infoHash)),
       ),
       `the file list of ${infoHash}`,
     );
@@ -184,11 +182,11 @@ export class HlsService {
     if (!kind || !name) {
       throw new HttpError(404, `Unsupported path "${parts.join('/')}"`);
     }
-
-    const asset = await this.awaited(
-      AssetRegistry.indexKey(infoHash, fileIndex),
-      signal,
-      () => this.registry.get(infoHash, fileIndex),
+    const indexKey = AssetRegistry.indexKey(infoHash, fileIndex);
+    const asset = await this.awaited(indexKey, () =>
+      this.flights.run(indexKey, signal, () =>
+        this.registry.get(infoHash, fileIndex),
+      ),
     );
     const rendition = asset.rendition(
       kind,
@@ -215,7 +213,7 @@ export class HlsService {
 
     if (name === 'init.mp4' && rendition.type !== 'subtitle') {
       await this.orTimeout(
-        asset.ensureInit(rendition, file, signal),
+        asset.ensureInit(rendition, file, Priority.Foreground, signal),
         `the init section of ${renditionPath(rendition)}`,
       );
       return { path: file, contentType: mediaType, cacheControl: MEDIA_CACHE };
@@ -238,15 +236,37 @@ export class HlsService {
       );
     }
 
-    // Order matters: stale background jobs release their slots before this
-    // segment competes for one, and the playhead moves only once it is served.
-    asset.dropStalePrefetch(rendition, n);
-    await this.orTimeout(
-      asset.ensureSegment(rendition, n, Priority.Foreground, signal),
-      `segment ${n} of ${renditionPath(rendition)}`,
-    );
-    asset.markHead(rendition, n);
-    asset.prefetchAfter(rendition, n);
+    if (!signal?.aborted) {
+      const mainSegment = this.orTimeout(
+        asset.ensureSegment(rendition, n, Priority.Foreground, signal),
+        `segment ${n} of ${renditionPath(rendition)}`,
+      );
+
+      // Keep torrent warm by quietly prefetching next segment
+      // Dropped after KEEP_WARM_S unless is promoted (requested)
+      if (this.options.keepWarm && n < asset.segmentCount - 1) {
+        for (
+          let i = n + 1;
+          i <= Math.min(n + this.options.warmSegments, asset.segmentCount);
+          i++
+        ) {
+          asset
+            .ensureSegment(rendition, i, Priority.Background, undefined, true)
+            .catch((err) => {
+              if (!(err instanceof RequestAbandonedError)) {
+                logger.error('Error while trying to keep warm', {
+                  err,
+                  rendition,
+                  n,
+                });
+              }
+            });
+        }
+      }
+
+      await mainSegment;
+    }
+
     return {
       path: file,
       contentType:
@@ -255,20 +275,20 @@ export class HlsService {
     };
   }
 
-  // No playhead is left on this rendition, so its background jobs have no
-  // reader to serve.
-  private dropOrphanedPrefetch(dir: string): void {
-    const prefix = keyPrefix(dir);
-    this.options.queue.cancelBackground((key) => key.startsWith(prefix));
-  }
-
   private async publish(
     infoHash: string,
     fileIndex: number,
     priority: Priority = Priority.Foreground,
+    signal?: AbortSignal,
   ): Promise<Asset> {
-    const asset = await this.registry.get(infoHash, fileIndex, priority);
+    const asset = await this.registry.get(
+      infoHash,
+      fileIndex,
+      priority,
+      signal,
+    );
     await asset.writePlaylists();
+
     return asset;
   }
 
@@ -311,12 +331,16 @@ export class HlsService {
       await asset.ensureInit(
         rendition,
         path.join(asset.dirOf(rendition), 'init.mp4'),
+        Priority.Background,
+        undefined,
       );
     }
     const last = Math.min(this.options.warmSegments, asset.segmentCount);
     for (let n = 0; n < last; n++) {
       for (const rendition of tracks) {
-        await asset.ensureSegment(rendition, n, Priority.Background);
+        await asset
+          .ensureSegment(rendition, n, Priority.Background, undefined)
+          .catch(() => {});
       }
     }
     logger.info('Warmed a title', {
@@ -332,24 +356,13 @@ export class HlsService {
   // when the client leaves.
   private async awaited<T>(
     key: string,
-    signal: AbortSignal | undefined,
-    work: () => Promise<T>,
+    work: () => FlightResponse<T>,
   ): Promise<T> {
-    if (signal?.aborted) {
-      throw new RequestAbandonedError(`Nobody is waiting for ${key}`);
-    }
-    this.playheads.want(key);
-    try {
-      return await untilAborted(
-        work(),
-        signal,
-        () => new RequestAbandonedError(`Nobody is waiting for ${key}`),
-      );
-    } finally {
-      if (this.playheads.release(key) && signal?.aborted) {
-        this.options.queue.abandon(key);
-      }
-    }
+    return await untilAborted(
+      work,
+      () => new RequestAbandonedError(`User stopped waiting for ${key}`),
+      () => this.options.queue.abandon(key),
+    );
   }
 
   // Bounds how long a client is held. The work behind it keeps running for

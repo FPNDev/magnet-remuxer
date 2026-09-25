@@ -84,12 +84,12 @@ export class PeerMemory {
     if (!serving.length) {
       return false;
     }
-    await this.flights.run(torrent.infoHash, () =>
+    await this.flights.run(torrent.infoHash, undefined, () =>
       writeFileAtomic(
         this.layout.peersFile(torrent.infoHash),
         JSON.stringify(serving),
       ),
-    );
+    ).promise;
     return true;
   }
 }

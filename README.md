@@ -3,7 +3,7 @@
 An HTTP server that plays a torrent over HLS. `GET /m3u8?magnet=...` answers
 with a master playlist, and each segment behind that playlist is cut out of the
 torrent's MKV and remuxed into fragmented MP4 when a player asks for it. Only
-the bytes under the playhead and a short prefetch window are downloaded, so a
+the bytes under the playhead are downloaded, so a
 two hour file starts in seconds from cold, in milliseconds when warmed, and a seek costs one segment.
 
 Video is never re-encoded. The elementary stream is copied into fMP4, which
@@ -32,8 +32,7 @@ tracks are converted to WebVTT; bitmap formats such as PGS are skipped.
 5. **Remux.** The slice is piped into ffmpeg on stdin and comes back as an fMP4
    segment, or as WebVTT for subtitles. The init segment is written once per
    rendition. Jobs run through a priority queue: what a player is waiting for
-   preempts prefetch, and per-torrent concurrency is capped because reads of
-   one swarm divide its bandwidth rather than adding to it.
+   preempts warming.
 6. **Cache.** Pieces, segments and metadata live under `CACHE_DIR` with a
    least-recently-used budget each, plus an optional ceiling on the directory
    as a whole. Writes are atomic, so a partial file is never served as a
@@ -68,36 +67,34 @@ node dist/index.js  # when the build is current
 
 ## Configuration
 
-| Variable               | Default              | What it does                                                                                                       |
-| ---------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `PORT`                 | `3000`               | HTTP port.                                                                                                         |
-| `LOG_LEVEL`            | `info`               | `debug`, `info`, `warn` or `error`.                                                                                |
-| `FFMPEG_PATH`          | `ffmpeg`             | Path to the ffmpeg binary.                                                                                         |
-| `CACHE_DIR`            | `<tmp>/magnet-cache` | Pieces, playlists, segments, metadata.                                                                             |
-| `PIECE_CACHE_MB`       | `8192`               | Budget for downloaded pieces.                                                                                      |
-| `SEGMENT_CACHE_MB`     | `15360`              | Budget for rendered segments.                                                                                      |
-| `METADATA_CACHE_MB`    | `2048`               | Budget for indexes, playlists, init segments, torrent metadata and peer memory.                                    |
-| `CACHE_TOTAL_MB`       | unset                | Ceiling for the whole cache directory, measured rather than added up. Unset leaves the three budgets on their own. |
-| `CACHE_SWEEP_MINUTES`  | `5`                  | How often disk usage is measured against that ceiling.                                                             |
-| `SEGMENT_DURATION`     | `2`                  | Target segment length in seconds. Changing it invalidates playlists and segments already on disk.                  |
-| `PREFETCH_SEGMENTS`    | `9`                  | Segments rendered ahead of the playhead.                                                                           |
-| `PREFETCH_AHEAD_MB`    | `96`                 | Cap on the bytes read for that prefetch.                                                                           |
-| `WARM_SEGMENTS`        | `2`                  | Segments rendered by `GET /warm`. `0` warms the index and playlists alone.                                         |
-| `WARM_CONCURRENCY`     | `4`                  | Titles warmed at once.                                                                                             |
-| `REQUEST_TIMEOUT_S`    | `120`                | A request waiting longer than this fails with 504.                                                                 |
-| `MAX_CONCURRENT_JOBS`  | `max(16, cpus)`      | ffmpeg jobs across all torrents.                                                                                   |
-| `MAX_JOBS_PER_TORRENT` | `2`                  | ffmpeg jobs reading one torrent.                                                                                   |
-| `JOB_TIMEOUT_S`        | `180`                | Hard limit for one segment job.                                                                                    |
-| `READ_STALL_S`         | `45`                 | Fail a read when the torrent receives nothing for this long.                                                       |
-| `MAX_PEERS`            | `100`                | Connections held per torrent.                                                                                      |
-| `TAIL_HEDGE`           | `1`                  | Ask a second peer for the block a read is stopped at.                                                              |
-| `TAIL_HEDGE_MS`        | `250`                | How long that block waits before the second peer is asked.                                                         |
-| `PEER_CHURN`           | `1`                  | Drop peers that hold nothing being read, or answer nothing.                                                        |
-| `PEER_CHURN_GRACE_S`   | `10`                 | How long a new connection has to prove itself.                                                                     |
-| `BAN_CORRUPT_PEERS`    | `1`                  | Ban peers whose data fails verification.                                                                           |
-| `PEER_BAN_DAYS`        | `7`                  | How long such a ban lasts. Bans survive a restart.                                                                 |
-| `METADATA_TIMEOUT_S`   | `90`                 | How long to wait for torrent metadata.                                                                             |
-| `TORRENT_IDLE_S`       | `600`                | Remove torrents unused for this long.                                                                              |
+| Variable              | Default              | What it does                                                                                                        |
+| --------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `PORT`                | `3000`               | HTTP port.                                                                                                          |
+| `LOG_LEVEL`           | `info`               | `debug`, `info`, `warn` or `error`.                                                                                 |
+| `FFMPEG_PATH`         | `ffmpeg`             | Path to the ffmpeg binary.                                                                                          |
+| `CACHE_DIR`           | `<tmp>/magnet-cache` | Pieces, playlists, segments, metadata.                                                                              |
+| `PIECE_CACHE_MB`      | `8192`               | Budget for downloaded pieces.                                                                                       |
+| `SEGMENT_CACHE_MB`    | `15360`              | Budget for rendered segments.                                                                                       |
+| `METADATA_CACHE_MB`   | `2048`               | Budget for indexes, playlists, init segments, torrent metadata and peer memory.                                     |
+| `CACHE_TOTAL_MB`      | unset                | Ceiling for the whole cache directory, measured rather than added up. Unset leaves the three budgets on their own.  |
+| `CACHE_SWEEP_MINUTES` | `5`                  | How often disk usage is measured against that ceiling.                                                              |
+| `SEGMENT_DURATION`    | `2`                  | Target segment length in seconds. Changing it invalidates playlists and segments already on disk.                   |
+| `KEEP_WARM_S`         | `5`                  | Time in seconds (or SEGMENT_DURATION + 1) until segment must be requested before dropping its job. 0 means disabled |
+| `WARM_SEGMENTS`       | `2`                  | Segments rendered by `GET /warm`. `0` warms the index and playlists alone.                                          |
+| `WARM_CONCURRENCY`    | `4`                  | Titles warmed at once.                                                                                              |
+| `REQUEST_TIMEOUT_S`   | `120`                | A request waiting longer than this fails with 504.                                                                  |
+| `MAX_CONCURRENT_JOBS` | `64`      | ffmpeg jobs across all torrents.                                                                                    |
+| `JOB_TIMEOUT_S`       | `180`                | Hard limit for one segment job.                                                                                     |
+| `READ_STALL_S`        | `45`                 | Fail a read when the torrent receives nothing for this long.                                                        |
+| `MAX_PEERS`           | `100`                | Connections held per torrent.                                                                                       |
+| `TAIL_HEDGE`          | `1`                  | Ask a second peer for the block a read is stopped at.                                                               |
+| `TAIL_HEDGE_MS`       | `250`                | How long that block waits before the second peer is asked.                                                          |
+| `PEER_CHURN`          | `1`                  | Drop peers that hold nothing being read, or answer nothing.                                                         |
+| `PEER_CHURN_GRACE_S`  | `10`                 | How long a new connection has to prove itself.                                                                      |
+| `BAN_CORRUPT_PEERS`   | `1`                  | Ban peers whose data fails verification.                                                                            |
+| `PEER_BAN_DAYS`       | `7`                  | How long such a ban lasts. Bans survive a restart.                                                                  |
+| `METADATA_TIMEOUT_S`  | `90`                 | How long to wait for torrent metadata.                                                                              |
+| `TORRENT_IDLE_S`      | `600`                | Remove torrents unused for this long.                                                                               |
 
 ## HTTP API
 
@@ -144,9 +141,6 @@ path segment are checked before any path is built.
 | `audio/<track>/<n>.m4s`        | Audio segment                             |
 | `subtitles/<track>/index.m3u8` | Subtitle media playlist                   |
 | `subtitles/<track>/<n>.vtt`    | Subtitle segment, WebVTT, no init segment |
-
-A segment request renders the segment when it is not already cached, and moves
-the playhead for that rendition, which is what drives prefetch.
 
 ### `GET /status`
 
