@@ -2,7 +2,7 @@ import { mkdir, rm } from 'node:fs/promises';
 
 import type { CacheLayout } from '../cache/cache-layout.js';
 import type { SegmentCache } from '../cache/segment-cache.js';
-import { HttpError } from '../errors.js';
+import { HttpError, RequestAbandonedError } from '../errors.js';
 import { logger } from '../logger.js';
 import {
   buildMediaIndex,
@@ -15,10 +15,11 @@ import type { TorrentManager } from '../torrent/torrent-manager.js';
 import { ReadPriority, TorrentFileSource } from '../torrent/torrent-source.js';
 import { readJson, writeFileAtomic } from '../util/fs.js';
 import { SizeLru } from '../util/lru.js';
-import { SingleFlight } from '../util/single-flight.js';
+import { SingleFlight, type FlightResponse } from '../util/single-flight.js';
 import { Priority, type TaskQueue } from '../util/task-queue.js';
 import { Asset } from './asset.js';
 import type { Remuxer } from './remux.js';
+import { untilAborted } from '../util/async.js';
 
 export const MATROSKA_FILE = /\.(mkv|mk3d|webm)$/i;
 // An asset rebuilds from its on-disk index cheaply, so the live set is
@@ -74,19 +75,22 @@ export class AssetRegistry {
     if (priority === Priority.Foreground) {
       this.options.queue.promote(indexKey);
     }
-    return this.flights.run(indexKey, signal, async () => {
-      const existing = this.assets.get(key);
-      if (existing) {
-        return existing;
-      }
-      const asset = this.build(
-        infoHash,
-        fileIndex,
-        await this.indexOf(infoHash, fileIndex, priority),
-      );
-      this.remember(key, asset);
-      return asset;
-    }).promise;
+
+    return this.awaited(indexKey, () =>
+      this.flights.run(indexKey, signal, async () => {
+        const existing = this.assets.get(key);
+        if (existing) {
+          return existing;
+        }
+        const asset = this.build(
+          infoHash,
+          fileIndex,
+          await this.indexOf(infoHash, fileIndex, priority),
+        );
+        this.remember(key, asset);
+        return asset;
+      }),
+    );
   }
 
   // The largest Matroska file is the feature; samples and extras are smaller.
@@ -207,6 +211,17 @@ export class AssetRegistry {
           });
           return index;
         }),
+    );
+  }
+
+  private async awaited<T>(
+    key: string,
+    work: () => FlightResponse<T>,
+  ): Promise<T> {
+    return await untilAborted(
+      work,
+      () => new RequestAbandonedError(`Nobody is waiting for ${key}`),
+      () => this.options.queue.abandon(key),
     );
   }
 }

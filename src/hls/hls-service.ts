@@ -46,10 +46,9 @@ export interface ServedFile {
 const SEGMENT_NAME = /^(\d+)\.(m4s|vtt)$/;
 
 const PLAYLIST_TYPE = 'application/vnd.apple.mpegurl';
-// A rendered segment never changes, so it caches for a day. Playlists are
-// rewritten whenever the media index is rebuilt.
-const PLAYLIST_CACHE = 'public, max-age=60';
-const MEDIA_CACHE = 'public, max-age=86400';
+// Files under infoHash cannot change, therefore we can cache indefinitely
+const PLAYLIST_CACHE = 'public, max-age=86400, immutable';
+const MEDIA_CACHE = 'public, max-age=86400, immutable';
 
 /**
  * Entry points behind the HLS routes: master playlist, warm, file list,
@@ -95,18 +94,8 @@ export class HlsService {
     const file = layout.masterFile(infoHash, fileIndex);
 
     if (!(await exists(file))) {
-      const indexKey = AssetRegistry.indexKey(infoHash, fileIndex);
       await this.orTimeout(
-        this.awaited(indexKey, () =>
-          this.flights.run(indexKey, signal, () => {
-            return this.publish(
-              infoHash,
-              fileIndex,
-              Priority.Foreground,
-              signal,
-            );
-          }),
-        ),
+        this.publish(infoHash, fileIndex, Priority.Foreground, signal),
         `the playlists for ${infoHash}/${fileIndex}`,
       );
     }
@@ -182,12 +171,7 @@ export class HlsService {
     if (!kind || !name) {
       throw new HttpError(404, `Unsupported path "${parts.join('/')}"`);
     }
-    const indexKey = AssetRegistry.indexKey(infoHash, fileIndex);
-    const asset = await this.awaited(indexKey, () =>
-      this.flights.run(indexKey, signal, () =>
-        this.registry.get(infoHash, fileIndex),
-      ),
-    );
+    const asset = await this.registry.get(infoHash, fileIndex);
     const rendition = asset.rendition(
       kind,
       trackParam === undefined
@@ -254,11 +238,7 @@ export class HlsService {
             .ensureSegment(rendition, i, Priority.Background, undefined, true)
             .catch((err) => {
               if (!(err instanceof RequestAbandonedError)) {
-                logger.error('Error while trying to keep warm', {
-                  err,
-                  rendition,
-                  n,
-                });
+                throw err;
               }
             });
         }
