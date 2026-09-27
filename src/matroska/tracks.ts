@@ -11,7 +11,7 @@ import { Id } from './ids.js';
 
 export type TrackKind = 'video' | 'audio' | 'subtitle';
 
-export interface MkvTrack {
+export type MkvTrack = {
   number: number;
   uid: string;
   kind: TrackKind;
@@ -30,7 +30,7 @@ export interface MkvTrack {
   // The TrackEntry element verbatim, base64. Lets a rebuilt header carry the
   // track through byte for byte.
   entry: string;
-}
+};
 
 // Matroska TrackType values. Anything else (logo, buttons, control) is dropped.
 const TRACK_KINDS: Record<number, TrackKind> = {

@@ -14,7 +14,7 @@ import {
 import { Id } from './ids.js';
 import { parseTracks, type MkvTrack } from './tracks.js';
 
-export interface MatroskaLayout {
+export type MatroskaLayout = {
   docType: string;
   ebmlHeader: Buffer;
   info: Buffer;
@@ -24,12 +24,12 @@ export interface MatroskaLayout {
   mediaEnd: number;
   tracks: MkvTrack[];
   cues: CuePoint[];
-}
+};
 
-interface RawElement {
+type RawElement = {
   header: ElementHeader;
   data: Buffer;
-}
+};
 
 // Header walking touches many small elements, so every read pulls at least
 // this much and later elements come out of the same block.

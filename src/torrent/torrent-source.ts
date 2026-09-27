@@ -18,11 +18,11 @@ export const ReadPriority = {
 } as const;
 export type ReadPriority = (typeof ReadPriority)[keyof typeof ReadPriority];
 
-export interface TorrentReadOptions {
+export type TorrentReadOptions = {
   stallMs: number;
   priority?: ReadPriority | undefined;
   signal?: AbortSignal | undefined;
-}
+};
 
 /**
  * ByteSource over one file of a torrent. A read pins the pieces it covers
@@ -130,12 +130,12 @@ export class TorrentFileSource implements ByteSource {
   }
 }
 
-interface WatchdogOptions {
+type WatchdogOptions = {
   stallMs: number;
   progress: () => number;
   onWait: () => void;
   onStall: () => Error;
-}
+};
 
 // Progress is measured on the whole torrent, not on this stream. A read
 // waiting its turn behind other pieces is slow, not stalled.

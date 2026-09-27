@@ -15,10 +15,10 @@ import { MatroskaError } from '../matroska/ebml.js';
 // A torrent's file list is fixed by its info hash, so it caches for a day.
 const FILE_LIST_CACHE = 'public, max-age=86400';
 
-export interface AppDependencies {
+export type AppDependencies = {
   hls: HlsService;
   status: () => unknown;
-}
+};
 
 export function createApp({ hls, status }: AppDependencies): express.Express {
   const app = express();

@@ -1,7 +1,7 @@
-interface Entry {
+type Entry = {
   bytes: number;
   usedAt: number;
-}
+};
 
 /**
  * Byte-budgeted LRU. Map iteration order is insertion order, so the head is

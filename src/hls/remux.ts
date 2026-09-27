@@ -72,30 +72,30 @@ const FMP4_OUTPUT_ARGS = [
 
 const WEBVTT_OUTPUT_ARGS = ['-c:s', 'webvtt', '-f', 'webvtt', 'pipe:1'];
 
-export interface RemuxTarget {
+export type RemuxTarget = {
   index: MediaIndex;
   source: ByteSource;
   rendition: Rendition;
   signal?: AbortSignal | undefined;
-}
+};
 
-export interface InterleavingNotes {
+export type InterleavingNotes = {
   load(): Promise<string[]>;
   save(files: string[]): void;
-}
+};
 
-export interface RemuxerOptions {
+export type RemuxerOptions = {
   ffmpegPath: string;
   timeoutMs: number;
   notes?: InterleavingNotes | undefined;
-}
+};
 
 const MAX_REMEMBERED_FILES = 4096;
 
-interface Plan {
+type Plan = {
   slices: SliceTarget[];
   args: string[];
-}
+};
 
 export class Remuxer {
   // Files whose blocks sit far from the cluster headers that reference them.

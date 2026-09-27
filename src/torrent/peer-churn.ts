@@ -34,17 +34,17 @@ const RECONNECT_WINDOW_MS = 60_000;
 // at BAN_MS, so a mistake costs a minute and a repeat offender ten.
 const FREELOAD_BAN_MS = 60_000;
 
-export interface PeerChurnOptions {
+export type PeerChurnOptions = {
   enabled: boolean;
   graceMs: number;
-}
+};
 
-export interface ChurnStats {
+export type ChurnStats = {
   dropped: number;
   reasons: Record<string, number>;
-}
+};
 
-interface Seen {
+type Seen = {
   since: number;
   bytes: number;
   // Start of the stretch in which the peer sent nothing. Set on first
@@ -52,32 +52,32 @@ interface Seen {
   // wire has been silent.
   quietSince: number;
   asked: boolean;
-}
+};
 
 // What one address has done across every wire it has held, so a peer that
 // reconnects is judged on its history instead of from scratch.
-interface Address {
+type Address = {
   fruitless: number;
   served: number;
   offenses: number;
   lastSeen: number;
-}
+};
 
-interface Candidate {
+type Candidate = {
   wire: SwarmWire;
   weight: number;
   reason: string;
   quietSince: number;
-}
+};
 
-interface TorrentState {
+type TorrentState = {
   torrent: SwarmTorrent;
   timer: NodeJS.Timeout;
   seen: Map<SwarmWire, Seen>;
   addresses: Map<string, Address>;
   stats: ChurnStats;
   restore: () => void;
-}
+};
 
 /**
  * Drops peers that hold nothing being read or that have gone quiet, so

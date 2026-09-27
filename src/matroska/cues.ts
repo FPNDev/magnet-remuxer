@@ -1,14 +1,14 @@
 import { childElements, readUint, type EbmlElement } from './ebml.js';
 import { Id } from './ids.js';
 
-export interface CuePoint {
+export type CuePoint = {
   time: number;
   track: number;
   clusterPosition: number;
   // Offset of the block inside its cluster. Optional in the format and often
   // missing.
   relativePosition: number | undefined;
-}
+};
 
 /**
  * One entry per CueTrackPositions, so a single time yields one entry per

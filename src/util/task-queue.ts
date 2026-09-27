@@ -11,35 +11,35 @@ export class CancelledError extends Error {
   override name = 'CancelledError';
 }
 
-export interface TaskContext {
+export type TaskContext = {
   signal: AbortSignal;
   waitedMs: number;
-}
+};
 
 /**
  * key groups tasks for promote() and abandon(); group caps how much work one
  * torrent may run at once.
  */
-export interface TaskSpec {
+export type TaskSpec = {
   key: string;
   priority: Priority;
   stopIfNotPromoted?: boolean;
-}
+};
 
-interface Entry extends TaskSpec {
+type Entry = TaskSpec & {
   seq: number;
   queuedAt: number;
   start: () => void;
   cancel: (reason: Error) => void;
   abandonTimer?: NodeJS.Timeout;
-}
+};
 
-interface RunningTask {
+type RunningTask = {
   key: string;
   priority: Priority;
   stopIfNotPromoted: boolean;
   abort: AbortController;
-}
+};
 
 export class TaskQueue {
   private readonly waiting: Entry[] = [];

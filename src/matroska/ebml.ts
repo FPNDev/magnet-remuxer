@@ -10,18 +10,18 @@ export const UNKNOWN_SIZE_VINT = Buffer.from([
   0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
 ]);
 
-export interface ElementHeader {
+export type ElementHeader = {
   id: number;
   size: number;
   headerLength: number;
-}
+};
 
-export interface EbmlElement {
+export type EbmlElement = {
   id: number;
   start: number;
   dataStart: number;
   dataEnd: number;
-}
+};
 
 // Length comes from the leading zeros: 1xxxxxxx is one byte, 01xxxxxx two, up
 // to eight. A zero byte is not a valid vint start.

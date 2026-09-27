@@ -26,20 +26,20 @@ export type SliceRange =
     }
   | { mode: 'time'; from: number; to: number | null };
 
-export interface SliceOptions {
+export type SliceOptions = {
   header: Buffer;
   track: number;
   videoTrack: number;
   range: SliceRange;
-}
+};
 
-export interface SliceResult {
+export type SliceResult = {
   blocks: number;
   started: boolean;
   reachedEnd: boolean;
   sourceEnded: boolean;
   firstTrackTs: number | null;
-}
+};
 
 // A block header fits in far less than this. Peeking first keeps blocks of
 // other tracks out of memory: they are skipped, never buffered.

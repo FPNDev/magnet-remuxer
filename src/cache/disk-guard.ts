@@ -15,12 +15,12 @@ const EVICT_CHUNK = 64 * 1024 * 1024;
 // event loop also serves playback.
 const STAT_BATCH = 64;
 
-export interface PieceBudget {
+export type PieceBudget = {
   oldestUsedAt(): number | undefined;
   evictOldest(bytes: number): Promise<number>;
-}
+};
 
-export interface DiskGuardOptions {
+export type DiskGuardOptions = {
   layout: CacheLayout;
   pieces: PieceBudget;
   segments: SegmentCache;
@@ -28,9 +28,9 @@ export interface DiskGuardOptions {
   totalBytes: number;
   intervalMs: number;
   inUse: () => Set<string>;
-}
+};
 
-export interface CacheUsage {
+export type CacheUsage = {
   pieces: number;
   segments: number;
   metadata: number;
@@ -39,12 +39,12 @@ export interface CacheUsage {
   titles: number;
   freed: { pieces: number; segments: number; metadata: number };
   sweptAt: number;
-}
+};
 
-interface Title {
+type Title = {
   metadataBytes: number;
   writtenAt: number;
-}
+};
 
 /**
  * Sweeps the cache directory on a timer: measures what is on disk, feeds the

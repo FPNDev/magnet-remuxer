@@ -19,24 +19,24 @@ const TRACKED_PIECES = 512;
 // webtorrent reports a hash failure only as a warning string.
 const FAILED_PIECE = /Piece (\d+) failed verification/u;
 
-export interface CorruptPeersOptions {
+export type CorruptPeersOptions = {
   enabled: boolean;
   banMs: number;
-}
+};
 
-export interface CorruptStats {
+export type CorruptStats = {
   failures: number;
   banned: number;
-}
+};
 
-interface TorrentState {
+type TorrentState = {
   torrent: SwarmTorrent;
   infoHash: string;
   senders: Map<number, Map<SwarmWire, number>>;
   strikes: Map<string, { count: number; at: number }>;
   stats: CorruptStats;
   detach: () => void;
-}
+};
 
 /**
  * Blames and bans peers whose blocks make a piece fail its hash check.

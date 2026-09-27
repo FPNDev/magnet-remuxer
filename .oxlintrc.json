@@ -23,7 +23,8 @@
     "no-await-in-loop": "off",
     "max-lines": "off",
     "max-classes-per-file": "off",
-    "unicorn/no-useless-undefined": ["error", { "checkArguments": false }]
+    "unicorn/no-useless-undefined": ["error", { "checkArguments": false }],
+    "typescript/consistent-type-definitions": ["error", "type"]
   },
   "ignorePatterns": ["dist/*", "scripts/*"]
 }

@@ -5,17 +5,17 @@ import type { SwarmTorrent } from './swarm-internals.js';
 
 const SAVE_DELAY_MS = 2000;
 
-interface Ban {
+type Ban = {
   until: number;
   reason: string;
   keep: boolean;
-}
+};
 
-interface TorrentBans {
+type TorrentBans = {
   bans: Map<string, Ban>;
   saveTimer: NodeJS.Timeout | undefined;
   restore: () => void;
-}
+};
 
 /**
  * Per-torrent address bans. A ban marked keep is written to disk and

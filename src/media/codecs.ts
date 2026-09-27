@@ -4,30 +4,30 @@ import type { MediaIndex } from './media-index.js';
 
 export type VideoCodec = 'avc' | 'hevc' | 'av1' | 'vp9';
 
-export interface VideoRendition {
+export type VideoRendition = {
   type: 'video';
   track: MkvTrack;
   codec: VideoCodec;
-}
+};
 
-export interface AudioRendition {
+export type AudioRendition = {
   type: 'audio';
   track: MkvTrack;
   transcode: boolean;
-}
+};
 
-export interface SubtitleRendition {
+export type SubtitleRendition = {
   type: 'subtitle';
   track: MkvTrack;
-}
+};
 
 export type Rendition = VideoRendition | AudioRendition | SubtitleRendition;
 
-export interface RenditionSet {
+export type RenditionSet = {
   video: VideoRendition;
   audio: AudioRendition[];
   subtitles: SubtitleRendition[];
-}
+};
 
 const VIDEO_CODECS: Record<string, VideoCodec> = {
   'V_MPEG4/ISO/AVC': 'avc',

@@ -22,7 +22,7 @@ import { renditionPath, segmentFileName } from './playlists.js';
 import type { Remuxer } from './remux.js';
 import { WarmQueue } from './warm-queue.js';
 
-export interface HlsServiceOptions {
+export type HlsServiceOptions = {
   layout: CacheLayout;
   torrents: TorrentManager;
   pieces: PieceCache;
@@ -36,13 +36,13 @@ export interface HlsServiceOptions {
   warmConcurrency: number;
   requestTimeoutMs: number;
   readStallMs: number;
-}
+};
 
-export interface ServedFile {
+export type ServedFile = {
   path: string;
   contentType: string;
   cacheControl: string;
-}
+};
 
 const SEGMENT_NAME = /^(\d+)\.(m4s|vtt)$/u;
 

@@ -13,13 +13,13 @@ export class FfmpegError extends Error {
   }
 }
 
-export interface FfmpegRun {
+export type FfmpegRun = {
   args: string[];
   input?: AsyncIterable<Buffer> | Iterable<Buffer> | undefined;
   output?: Writable | Writable[] | undefined;
   signal?: AbortSignal | undefined;
   timeoutMs?: number | undefined;
-}
+};
 
 // Only the tail of stderr is kept. A failing run can log per frame, and
 // the last lines are the ones that name the cause.

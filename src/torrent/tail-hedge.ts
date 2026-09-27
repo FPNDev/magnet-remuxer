@@ -21,43 +21,43 @@ const MAX_IN_FLIGHT = 32;
 // Its last blocks are what keeps it from being verified.
 const ENDGAME_BYTES = BLOCK_LENGTH * 4;
 
-export interface TailHedgeOptions {
+export type TailHedgeOptions = {
   enabled: boolean;
   deadlineMs: number;
-}
+};
 
-export interface HedgeStats {
+export type HedgeStats = {
   issued: number;
   endgame: number;
   won: number;
   late: number;
   wastedBytes: number;
-}
+};
 
-interface Hedge {
+type Hedge = {
   helper: SwarmWire;
   piece: number;
   offset: number;
   length: number;
   startedAt: number;
   settled: boolean;
-}
+};
 
-interface Watched {
+type Watched = {
   since: number;
   owner: SwarmWire;
   ownerBytes: number;
   tried: Set<SwarmWire>;
   hedge?: Hedge | undefined;
-}
+};
 
-interface TorrentState {
+type TorrentState = {
   torrent: SwarmTorrent;
   timer: NodeJS.Timeout;
   blocks: Map<string, Watched>;
   inFlight: number;
   stats: HedgeStats;
-}
+};
 
 const blockKey = (piece: number, offset: number) => `${piece}:${offset}`;
 

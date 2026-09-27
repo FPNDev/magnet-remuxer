@@ -3,16 +3,16 @@ import type { Torrent, TorrentPiece } from 'webtorrent';
 // The 16 KiB block every peer will serve. Clients refuse larger requests.
 export const BLOCK_LENGTH = 1 << 14;
 
-export interface BlockRequest {
+export type BlockRequest = {
   piece: number;
   offset: number;
   length: number;
   callback(err: Error | null, chunk?: Uint8Array): void;
-}
+};
 
 // These shapes mirror webtorrent internals that have no public API.
 // Anything underscored is private to it and moves between releases.
-export interface SwarmWire {
+export type SwarmWire = {
   destroyed: boolean;
   type: string;
   peerChoking: boolean;
@@ -47,26 +47,26 @@ export interface SwarmWire {
     err: Error | null,
     chunk: Uint8Array | null,
   ) => void;
-}
+};
 
-export interface SwarmPiece extends TorrentPiece {
+export type SwarmPiece = TorrentPiece & {
   get(index: number): Uint8Array | null;
-}
+};
 
-export interface Selection {
+export type Selection = {
   from: number;
   to: number;
   offset: number;
-}
+};
 
-export interface SwarmPeer {
+export type SwarmPeer = {
   id: string;
   addr?: string | undefined;
   type: string;
   wire: SwarmWire | null;
-}
+};
 
-export interface SwarmTorrent extends Torrent {
+export type SwarmTorrent = Torrent & {
   destroyed: boolean;
   bitfield: { get(index: number): boolean };
   pieces: (SwarmPiece | null)[];
@@ -76,7 +76,7 @@ export interface SwarmTorrent extends Torrent {
   _numConns: number;
   client: { maxConns: number };
   _addPeer(peer: unknown, type?: string, source?: string): unknown;
-}
+};
 
 export const asSwarmTorrent = (torrent: Torrent): SwarmTorrent =>
   torrent as unknown as SwarmTorrent;

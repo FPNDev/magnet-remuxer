@@ -2,11 +2,11 @@ import { createReadStream } from 'node:fs';
 import { Readable } from 'node:stream';
 
 /** Random-access reader over a fixed-length byte range. */
-export interface ByteSource {
+export type ByteSource = {
   readonly length: number;
   /** end is exclusive. */
   stream(start: number, end: number): Readable;
-}
+};
 
 // Views the chunk's memory rather than copying it, so the result is only safe
 // to read.

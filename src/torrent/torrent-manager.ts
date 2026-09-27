@@ -17,20 +17,20 @@ import { asSwarmTorrent, type SwarmWire } from './swarm-internals.js';
 import { TailHedge, type TailHedgeOptions } from './tail-hedge.js';
 import { PUBLIC_TRACKERS } from './public-trackers.js';
 
-export interface TorrentFileInfo {
+export type TorrentFileInfo = {
   index: number;
   name: string;
   path: string;
   length: number;
-}
+};
 
-export interface TorrentInfo {
+export type TorrentInfo = {
   infoHash: string;
   name: string;
   files: TorrentFileInfo[];
-}
+};
 
-export interface TorrentManagerOptions {
+export type TorrentManagerOptions = {
   layout: CacheLayout;
   pieces: PieceCache;
   metadataTimeoutMs: number;
@@ -39,7 +39,7 @@ export interface TorrentManagerOptions {
   hedge: TailHedgeOptions;
   churn: PeerChurnOptions;
   corrupt: CorruptPeersOptions;
-}
+};
 
 const SWEEP_INTERVAL_MS = 30_000;
 // Reads, hedging and churn each attach listeners per torrent, well past

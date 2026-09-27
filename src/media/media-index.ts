@@ -12,17 +12,17 @@ export const MEDIA_INDEX_VERSION = 2;
  * ts is a Matroska tick, cluster an absolute file offset, rel the block's
  * offset inside that cluster when the cue carried one.
  */
-export interface Keyframe {
+export type Keyframe = {
   ts: number;
   cluster: number;
   rel?: number | undefined;
-}
+};
 
 /**
  * Everything needed to plan and cut segments without reading the file again.
  * Durations are seconds; keyframe and track timestamps stay in ticks.
  */
-export interface MediaIndex {
+export type MediaIndex = {
   version: number;
   fileName: string;
   fileLength: number;
@@ -38,18 +38,18 @@ export interface MediaIndex {
   keyframes: Keyframe[];
   segmentStarts: number[];
   targetDuration: number;
-}
+};
 
 /**
  * A byte range to read plus the cut to apply to it. verifyStart asks the
  * remuxer to confirm the first block really lands where it was asked for.
  */
-export interface SliceTarget {
+export type SliceTarget = {
   readStart: number;
   readEnd: number;
   range: SliceRange;
   verifyStart?: boolean;
-}
+};
 
 // Never end on a sliver of a segment: fold a short tail into the one before.
 const MIN_TAIL_SECONDS = 1;

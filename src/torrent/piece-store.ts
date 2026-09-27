@@ -10,32 +10,32 @@ import { SizeLru } from '../util/lru.js';
 
 type Callback<T = void> = (err: Error | null, value?: T) => void;
 
-interface GetOptions {
+type GetOptions = {
   offset?: number;
   length?: number;
-}
+};
 
-interface DontHaveWire {
+type DontHaveWire = {
   lt_donthave?: { donthave(index: number): void };
-}
+};
 
-interface TorrentInternals extends Torrent {
+type TorrentInternals = Torrent & {
   destroyed: boolean;
   wires: (Torrent['wires'][number] & DontHaveWire)[];
   _markUnverified(index: number): void;
-}
+};
 
-export interface AdoptableTorrent extends Torrent {
+export type AdoptableTorrent = Torrent & {
   lastPieceLength: number;
   _hashes: string[];
   _markVerified(index: number): void;
-}
+};
 
-export interface AdoptionResult {
+export type AdoptionResult = {
   kept: number;
   dropped: number;
   hashedBytes: number;
-}
+};
 
 const pieceKey = (infoHash: string, index: number) => `${infoHash}:${index}`;
 const PIECE_FILE = /^(\d+)\.piece$/u;

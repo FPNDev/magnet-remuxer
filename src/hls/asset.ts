@@ -34,7 +34,7 @@ import type { Remuxer } from './remux.js';
 // speed. It is logged, never enforced.
 const SLOW_QUEUE_WAIT_MS = 5000;
 
-export interface AssetOptions {
+export type AssetOptions = {
   infoHash: string;
   fileIndex: number;
   index: MediaIndex;
@@ -46,7 +46,7 @@ export interface AssetOptions {
   queue: TaskQueue;
   readStallMs: number;
   warmSegments: number;
-}
+};
 
 /**
  * One (infoHash, fileIndex) pair: its media index, renditions, cache

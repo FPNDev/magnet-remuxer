@@ -4,15 +4,15 @@ import { errorMessage, logger } from '../logger.js';
 // are refused rather than held.
 const MAX_BACKLOG = 256;
 
-export interface WarmRequest {
+export type WarmRequest = {
   infoHash: string;
   fileIndex: number | undefined;
-}
+};
 
-export interface WarmQueueOptions {
+export type WarmQueueOptions = {
   concurrency: number;
   warm: (infoHash: string, fileIndex: number | undefined) => Promise<void>;
-}
+};
 
 export class WarmQueue {
   private readonly backlog: WarmRequest[] = [];

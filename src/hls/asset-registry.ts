@@ -26,7 +26,7 @@ export const MATROSKA_FILE = /\.(mkv|mk3d|webm)$/iu;
 // capped by count rather than by size.
 const MEMORY_ASSETS = 64;
 
-export interface AssetRegistryOptions {
+export type AssetRegistryOptions = {
   layout: CacheLayout;
   torrents: TorrentManager;
   pieces: PieceCache;
@@ -36,7 +36,7 @@ export interface AssetRegistryOptions {
   segmentDuration: number;
   readStallMs: number;
   warmSegments: number;
-}
+};
 
 export class AssetRegistry {
   private readonly assets = new Map<string, Asset>();
