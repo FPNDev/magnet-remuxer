@@ -4,17 +4,18 @@ import type { CacheLayout } from '../cache/cache-layout.js';
 import type { MetadataCache } from '../cache/metadata-cache.js';
 import type { SegmentCache } from '../cache/segment-cache.js';
 import { HttpError, RequestAbandonedError } from '../errors.js';
-import { logger } from '../logger.js';
+import { errorMessage, logger } from '../logger.js';
 import { isInfoHash, parseInfoHash } from '../torrent/magnet.js';
 import type { PieceCache } from '../torrent/piece-store.js';
-import type {
-  TorrentInfo,
-  TorrentManager,
-} from '../torrent/torrent-manager.js';
+import type { TorrentManager } from '../torrent/torrent-manager.js';
 import { untilAborted, withTimeout } from '../util/async.js';
-import { exists, readJson } from '../util/fs.js';
+import { exists } from '../util/fs.js';
 import { SingleFlight, type FlightResponse } from '../util/single-flight.js';
-import { Priority, type TaskQueue } from '../util/task-queue.js';
+import {
+  CancelledError,
+  Priority,
+  type TaskQueue,
+} from '../util/task-queue.js';
 import type { Asset } from './asset.js';
 import { AssetRegistry, MATROSKA_FILE } from './asset-registry.js';
 import { renditionPath, segmentFileName } from './playlists.js';
@@ -231,14 +232,21 @@ export class HlsService {
       if (this.options.keepWarm && n < asset.segmentCount - 1) {
         for (
           let i = n + 1;
-          i <= Math.min(n + this.options.warmSegments, asset.segmentCount);
+          i < Math.min(n + 1 + this.options.warmSegments, asset.segmentCount);
           i++
         ) {
           asset
-            .ensureSegment(rendition, i, Priority.Background, undefined, true)
+            .ensureSegment(rendition, i, Priority.Background, signal, true)
             .catch((err) => {
-              if (!(err instanceof RequestAbandonedError)) {
-                throw err;
+              if (
+                !(err instanceof CancelledError) &&
+                !(err instanceof RequestAbandonedError)
+              ) {
+                logger.warn('Keep-warm render failed', {
+                  rendition: renditionPath(rendition),
+                  n: i,
+                  error: errorMessage(err),
+                });
               }
             });
         }
@@ -283,15 +291,8 @@ export class HlsService {
     infoHash: string,
     fileIndex: number | undefined,
   ): Promise<boolean> {
-    const { layout } = this.options;
-    if (fileIndex !== undefined) {
-      return exists(layout.masterFile(infoHash, fileIndex));
-    }
-    const info = await readJson<TorrentInfo>(layout.infoFile(infoHash));
-    const largest = info?.files
-      .filter((file) => MATROSKA_FILE.test(file.name))
-      .sort((a, b) => b.length - a.length)[0];
-    return largest ? exists(layout.masterFile(infoHash, largest.index)) : false;
+    const index = fileIndex ?? (await this.registry.defaultFileIndex(infoHash));
+    return exists(this.options.layout.masterFile(infoHash, index));
   }
 
   // Renders the opening of the default tracks so a later play starts without

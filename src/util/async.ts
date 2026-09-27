@@ -35,14 +35,21 @@ export function untilAborted<T>(
     return res;
   }
   return new Promise<T>((resolve, reject) => {
+    let finished = false;
+    const finish = () => {
+      if (!finished) {
+        finished = true;
+        onFinally?.();
+      }
+    };
     const handleAbort = () => {
       reject(onAbort?.());
-      onFinally?.();
+      finish();
     };
     signal.addEventListener('abort', handleAbort, { once: true });
     promise.then(resolve, reject).finally(() => {
       signal.removeEventListener('abort', handleAbort);
-      onFinally?.();
+      finish();
     });
   });
 }

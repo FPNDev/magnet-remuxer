@@ -128,6 +128,11 @@ export class Asset {
     priority: Priority,
     signal: AbortSignal | undefined,
   ): Promise<void> {
+    if (signal?.aborted) {
+      return Promise.reject(
+        new RequestAbandonedError(`Client is not more waiting for ${file}`),
+      );
+    }
     const { queue, remuxer } = this.options;
     if (priority === Priority.Foreground) {
       queue.promote(file);
@@ -160,6 +165,13 @@ export class Asset {
   ): Promise<void> {
     const { queue, segments, torrents, remuxer, pieces } = this.options;
     const file = this.segmentPath(rendition, n);
+    if (await exists(file)) {
+      segments.touch(file);
+      return;
+    }
+    if (signal?.aborted) {
+      throw new RequestAbandonedError(`Client is not more waiting for ${file}`);
+    }
     const isForeground = priority === Priority.Foreground;
     if (isForeground) {
       queue.promote(file);
@@ -223,17 +235,19 @@ export class Asset {
     try {
       await render();
     } catch (err) {
-      if (!(err instanceof CancelledError)) {
-        throw err;
-      }
-
-      for (
-        let i = n + 1;
-        i <= Math.min(n + this.options.warmSegments, this.segmentCount);
-        i++
+      if (
+        err instanceof CancelledError ||
+        err instanceof RequestAbandonedError
       ) {
-        queue.abandon(this.segmentPath(rendition, i), true);
+        for (
+          let i = n + 1;
+          i < Math.min(n + 1 + this.options.warmSegments, this.segmentCount);
+          i++
+        ) {
+          queue.abandon(this.segmentPath(rendition, i), true);
+        }
       }
+      throw err;
     }
   }
 

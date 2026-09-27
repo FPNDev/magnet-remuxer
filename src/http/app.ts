@@ -110,9 +110,11 @@ function magnetFromQuery(req: Request): string {
  */
 function lifetime(res: Response): AbortSignal {
   const controller = new AbortController();
-  res.once('close', () =>
-    controller.abort(new RequestAbandonedError('Request ended')),
-  );
+  res.once('close', () => {
+    if (!res.writableFinished) {
+      controller.abort(new RequestAbandonedError('Request ended'));
+    }
+  });
   return controller.signal;
 }
 

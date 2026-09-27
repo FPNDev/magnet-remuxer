@@ -1,6 +1,7 @@
 type PendingFlight = {
   promise: Promise<unknown>;
   sharedAbortController: AbortController;
+  waiters: Set<AbortSignal>;
 };
 
 export type FlightResponse<T> = {
@@ -10,58 +11,65 @@ export type FlightResponse<T> = {
 
 export class SingleFlight {
   private readonly pending = new Map<string, PendingFlight>();
-  private readonly waiters = new Map<string, Set<AbortSignal>>();
 
   run<T>(
     key: string,
     signal: AbortSignal | undefined,
     task: () => Promise<T>,
   ): FlightResponse<T> {
-    if (signal) {
-      const waiters = this.waiters.get(key) || new Set();
-      waiters.add(signal);
-
-      signal.addEventListener(
-        'abort',
-        () => {
-          waiters.delete(signal);
-
-          if (!waiters.size) {
-            this.drop(key, true);
-          }
-        },
-        { once: true },
-      );
-    }
-
-    const existing = this.pending.get(key);
-    if (existing) {
-      return {
-        promise: existing.promise as Promise<T>,
-        signal: existing.sharedAbortController.signal,
+    let flight = this.pending.get(key);
+    if (!flight) {
+      const created: PendingFlight = {
+        promise: Promise.resolve()
+          .then(task)
+          .finally(() => {
+            this.drop(key, created);
+          }),
+        sharedAbortController: new AbortController(),
+        waiters: new Set(),
       };
+      this.pending.set(key, created);
+      flight = created;
     }
 
-    const sharedAbortController = new AbortController();
-    const promise = Promise.resolve()
-      .then(task)
-      .finally(() => this.drop(key));
+    if (signal) {
+      const { waiters } = flight;
+      const current = flight;
 
-    this.pending.set(key, {
-      promise,
-      sharedAbortController,
-    });
+      const leave = () => {
+        waiters.delete(signal);
 
-    return { promise, signal: sharedAbortController.signal };
+        if (waiters.size === 0) {
+          this.drop(key, current, true);
+        }
+      };
+
+      if (signal.aborted) {
+        leave();
+      } else {
+        waiters.add(signal);
+
+        const remove = () => {
+          signal.removeEventListener('abort', leave);
+        };
+        signal.addEventListener('abort', leave, { once: true });
+
+        flight.promise.then(remove, remove);
+      }
+    }
+
+    return {
+      promise: flight.promise as Promise<T>,
+      signal: flight.sharedAbortController.signal,
+    };
   }
 
-  drop(key: string, aborted = false) {
-    const pending = this.pending.get(key);
-    if (!pending) {
+  private drop(key: string, flight: PendingFlight, aborted = false) {
+    if (this.pending.get(key) !== flight) {
       return;
     }
     if (aborted) {
-      pending.sharedAbortController.abort();
+      flight.sharedAbortController.abort();
     }
     this.pending.delete(key);
   }

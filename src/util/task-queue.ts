@@ -37,6 +37,7 @@ interface Entry extends TaskSpec {
 interface RunningTask {
   key: string;
   priority: Priority;
+  stopIfNotPromoted: boolean;
   abort: AbortController;
 }
 
@@ -81,6 +82,7 @@ export class TaskQueue {
           const running: RunningTask = {
             key: entry.key,
             priority: entry.priority,
+            stopIfNotPromoted: entry.stopIfNotPromoted ?? false,
             abort: new AbortController(),
           };
           this.running.add(running);
@@ -99,7 +101,7 @@ export class TaskQueue {
             });
         },
       };
-      if (entry.priority === Priority.Background) {
+      if (entry.priority === Priority.Background && entry.stopIfNotPromoted) {
         this.abandonNotPromoted(entry.key);
       }
       this.waiting.push(entry);
@@ -116,6 +118,7 @@ export class TaskQueue {
     this.needPromotion.set(
       key,
       setTimeout(() => {
+        this.needPromotion.delete(key);
         logger.debug(
           `Abandoning ${key} after ${this.mustPromoteInS * 1000} - not promoted`,
         );
@@ -153,24 +156,25 @@ export class TaskQueue {
   }
 
   /**
-   * Drops queued tasks under key and aborts running ones. keepRunning demotes a
-   * runner to background instead, for work whose output is still worth caching.
+   * Drops queued tasks under key and aborts running ones. keepWarmOnly limits
+   * this to background tasks queued with stopIfNotPromoted, leaving foreground
+   * work and other background jobs untouched.
    */
-  abandon(key: string, backgroundOnly = false): void {
+  abandon(key: string, keepWarmOnly = false): void {
     if (
-      this.abandonWaiting(key, backgroundOnly) +
-      this.abandonRunning(key, backgroundOnly)
+      this.abandonWaiting(key, keepWarmOnly) +
+      this.abandonRunning(key, keepWarmOnly)
     ) {
       this.stopAbandonTimer(key);
       this.drain();
     }
   }
 
-  private abandonWaiting(key: string, backgroundOnly = false) {
+  private abandonWaiting(key: string, keepWarmOnly = false) {
     let abandonedTasks = 0;
     for (let i = this.waiting.length - 1; i >= 0; i--) {
       const entry = this.waiting[i]!;
-      if (shouldAbandon(entry, key, backgroundOnly)) {
+      if (shouldAbandon(entry, key, keepWarmOnly)) {
         ++abandonedTasks;
         this.waiting.splice(i, 1);
         entry.cancel(new CancelledError(`Abandoned ${entry.key}`));
@@ -179,11 +183,11 @@ export class TaskQueue {
     return abandonedTasks;
   }
 
-  private abandonRunning(key: string, backgroundOnly = false) {
+  private abandonRunning(key: string, keepWarmOnly = false) {
     let abandonedTasks = 0;
     for (const task of this.running) {
       if (
-        shouldAbandon(task, key, backgroundOnly) &&
+        shouldAbandon(task, key, keepWarmOnly) &&
         !task.abort.signal.aborted
       ) {
         ++abandonedTasks;
@@ -291,10 +295,11 @@ export class TaskQueue {
 function shouldAbandon(
   task: Entry | RunningTask,
   key: string,
-  backgroundOnly: boolean,
+  keepWarmOnly: boolean,
 ) {
   return (
     task.key === key &&
-    (!backgroundOnly || task.priority === Priority.Background)
+    (!keepWarmOnly ||
+      (task.priority === Priority.Background && task.stopIfNotPromoted))
   );
 }
