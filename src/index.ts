@@ -2,6 +2,8 @@
 import './env.js';
 
 import { mkdir } from 'node:fs/promises';
+import https from 'node:https';
+import { readFileSync } from 'node:fs';
 import { CacheLayout } from './cache/cache-layout.js';
 import { DiskGuard } from './cache/disk-guard.js';
 import { InterleavingNotes } from './cache/interleaving-notes.js';
@@ -115,14 +117,17 @@ async function main(): Promise<void> {
     }),
   });
 
-  const server = app.listen(config.port, config.host, (error?: Error) => {
-    if (error) {
-      throw error;
-    }
-    logger.info(`Listening on http://${config.host}:${config.port}`, {
-      cacheDir: config.cacheDir,
+  const server = https
+    .createServer(
+      {
+        cert: readFileSync(config.certFile),
+        key: readFileSync(config.certKey),
+      },
+      app,
+    )
+    .listen(config.port, config.host, () => {
+      console.log(`HTTPS server running on ${config.host}:${config.port}`);
     });
-  });
 
   let closing = false;
   const shutdown = (signal: string) => {

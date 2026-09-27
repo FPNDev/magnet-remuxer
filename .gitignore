@@ -8,3 +8,4 @@ CLAUDE.md
 .pre-commit-config.yaml
 scripts
 test
+certs

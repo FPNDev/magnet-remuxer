@@ -5,8 +5,8 @@
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
-    "start": "tsc && node dist/index.js",
+    "build": "tsc && node -e \"require('node:fs').cpSync('certs', 'dist/certs', { recursive: true })\"",
+    "start": "npm run build && node dist/index.js",
     "test": "tsc && node test/run-all.mjs"
   },
   "keywords": [],

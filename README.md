@@ -58,10 +58,12 @@ npm install
 npm run build
 ```
 
+`certs/` is gitignored, so a fresh clone does not have it. Provide it, holding the files `CERT_FILE` and `CERT_KEY` point at, before running `npm run build`; the build copies it to `dist/certs`.
+
 ## Running
 
 ```sh
-npm start           # tsc, then node dist/index.js
+npm start           # npm run build, then node dist/index.js
 node dist/index.js  # when the build is current
 ```
 
@@ -72,6 +74,8 @@ node dist/index.js  # when the build is current
 | `PORT`                | `3000`               | HTTP port.                                                                                                          |
 | `LOG_LEVEL`           | `info`               | `debug`, `info`, `warn` or `error`.                                                                                 |
 | `FFMPEG_PATH`         | `ffmpeg`             | Path to the ffmpeg binary.                                                                                          |
+| `CERT_FILE`           | required             | TLS certificate (PEM). A relative path resolves against `dist/`; `npm run build` copies `certs/` there.             |
+| `CERT_KEY`            | required             | Private key (PEM) matching `CERT_FILE`.                                                                             |
 | `CACHE_DIR`           | `<tmp>/magnet-cache` | Pieces, playlists, segments, metadata.                                                                              |
 | `PIECE_CACHE_MB`      | `8192`               | Budget for downloaded pieces.                                                                                       |
 | `SEGMENT_CACHE_MB`    | `15360`              | Budget for rendered segments.                                                                                       |

@@ -28,6 +28,14 @@ function flag(name: string, fallback: boolean): boolean {
   return !['0', 'false', 'no', 'off'].includes(raw.trim().toLowerCase());
 }
 
+function required(name: string): string {
+  const raw = env[name];
+  if (raw === undefined || raw === '') {
+    throw new Error(`${name} must be set`);
+  }
+  return raw;
+}
+
 function logLevel(name: string, fallback: LogLevel): LogLevel {
   const raw = env[name]?.trim().toLowerCase();
   return LOG_LEVELS.find((level) => level === raw) ?? fallback;
@@ -39,6 +47,8 @@ export const config = {
   host: env.HOST || '127.0.0.1',
   port: number('PORT', 3000),
   ffmpegPath: env.FFMPEG_PATH || 'ffmpeg',
+  certFile: path.resolve(import.meta.dirname, required('CERT_FILE')),
+  certKey: path.resolve(import.meta.dirname, required('CERT_KEY')),
   logLevel: logLevel('LOG_LEVEL', 'info'),
   cacheDir: path.resolve(
     env.CACHE_DIR || path.join(os.tmpdir(), 'magnet-cache'),
