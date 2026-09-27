@@ -158,7 +158,7 @@ export function readFloat(buf: Uint8Array, el: EbmlElement): number {
 export function readString(buf: Uint8Array, el: EbmlElement): string {
   return Buffer.from(buf.subarray(el.dataStart, el.dataEnd))
     .toString('utf8')
-    .replace(/\0+$/, '');
+    .replace(/\0+$/u, '');
 }
 
 export function readBytes(buf: Uint8Array, el: EbmlElement): Buffer {

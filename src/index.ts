@@ -160,7 +160,9 @@ process.on('uncaughtException', (err) => {
   logger.error('Uncaught exception', { error: err.stack ?? errorMessage(err) });
 });
 
-main().catch((err: unknown) => {
+try {
+  await main();
+} catch (err: unknown) {
   logger.error('Startup failed', { error: errorMessage(err) });
   process.exit(1);
-});
+}

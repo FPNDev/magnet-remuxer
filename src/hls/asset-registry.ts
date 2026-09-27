@@ -21,7 +21,7 @@ import { Asset } from './asset.js';
 import type { Remuxer } from './remux.js';
 import { untilAborted } from '../util/async.js';
 
-export const MATROSKA_FILE = /\.(mkv|mk3d|webm)$/i;
+export const MATROSKA_FILE = /\.(mkv|mk3d|webm)$/iu;
 // An asset rebuilds from its on-disk index cheaply, so the live set is
 // capped by count rather than by size.
 const MEMORY_ASSETS = 64;
@@ -59,7 +59,7 @@ export class AssetRegistry {
     return `segment:${infoHash}/${fileIndex}/${parts.join('/')}`;
   }
 
-  async get(
+  get(
     infoHash: string,
     fileIndex: number,
     priority: Priority = Priority.Foreground,
@@ -69,7 +69,7 @@ export class AssetRegistry {
     const cached = this.assets.get(key);
     if (cached) {
       this.order.touch(key);
-      return cached;
+      return Promise.resolve(cached);
     }
     const indexKey = AssetRegistry.indexKey(infoHash, fileIndex);
     if (priority === Priority.Foreground) {
@@ -96,9 +96,7 @@ export class AssetRegistry {
   // The largest Matroska file is the feature; samples and extras are smaller.
   async defaultFileIndex(infoHash: string): Promise<number> {
     const info = await this.options.torrents.info(infoHash);
-    const firstFile = info.files.filter((file) =>
-      MATROSKA_FILE.test(file.name),
-    )[0];
+    const firstFile = info.files.find((file) => MATROSKA_FILE.test(file.name));
     if (!firstFile) {
       throw new HttpError(404, 'Torrent contains no MKV or WebM files');
     }
@@ -214,14 +212,13 @@ export class AssetRegistry {
     );
   }
 
-  private async awaited<T>(
-    key: string,
-    work: () => FlightResponse<T>,
-  ): Promise<T> {
-    return await untilAborted(
+  private awaited<T>(key: string, work: () => FlightResponse<T>): Promise<T> {
+    return untilAborted(
       work,
       () => new RequestAbandonedError(`Nobody is waiting for ${key}`),
-      () => this.options.queue.abandon(key),
+      () => {
+        this.options.queue.abandon(key);
+      },
     );
   }
 }

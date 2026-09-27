@@ -38,7 +38,7 @@ export interface AdoptionResult {
 }
 
 const pieceKey = (infoHash: string, index: number) => `${infoHash}:${index}`;
-const PIECE_FILE = /^(\d+)\.piece$/;
+const PIECE_FILE = /^(\d+)\.piece$/u;
 const HASH_CHUNK_BYTES = 1024 * 1024;
 
 /**
@@ -65,15 +65,13 @@ export class PieceCache {
     budgetBytes: number,
   ) {
     this.pieces = new SizeLru(budgetBytes);
+    this.createStore = PieceCache.storeFactory(this);
+  }
 
-    // oxlint-disable-next-line no-this-alias
-    const cache = this;
+  private static storeFactory(cache: PieceCache): PieceCache['createStore'] {
     // webtorrent calls the store factory as a constructor, so it cannot be an
     // arrow function bound to the cache.
-    this.createStore = function createStore(
-      chunkLength: number,
-      opts: StoreOptions,
-    ) {
+    return function createStore(chunkLength: number, opts: StoreOptions) {
       const store = new SlidingPieceStore(
         cache,
         chunkLength,
@@ -128,7 +126,7 @@ export class PieceCache {
     const store = this.stores.get(infoHash);
     const adopted = store?.adopted() ?? [];
     const result: AdoptionResult = { kept: 0, dropped: 0, hashedBytes: 0 };
-    if (!store || !adopted.length) {
+    if (!store || adopted.length === 0) {
       return result;
     }
 
@@ -139,9 +137,7 @@ export class PieceCache {
         const actual =
           expected === undefined
             ? undefined
-            : await hashFile(this.piecePath(infoHash, index)).catch(
-                () => undefined,
-              );
+            : await hashFile(this.piecePath(infoHash, index)).catch(() => {});
         if (actual === undefined || actual !== expected) {
           this.discard(infoHash, index);
           result.dropped++;
@@ -246,7 +242,10 @@ export class PieceCache {
   }
 
   held(infoHash: string): Map<number, { bytes: number; mtimeMs: number }> {
-    return this.inventory.get(infoHash) ?? new Map();
+    return (
+      this.inventory.get(infoHash) ??
+      new Map<number, { bytes: number; mtimeMs: number }>()
+    );
   }
 
   oldestUsedAt(): number | undefined {
@@ -274,7 +273,7 @@ export class PieceCache {
       if (index === undefined) {
         continue;
       }
-      const info = await stat(path.join(dir, name)).catch(() => undefined);
+      const info = await stat(path.join(dir, name)).catch(() => {});
       if (info) {
         held.set(Number(index), { bytes: info.size, mtimeMs: info.mtimeMs });
       }
@@ -349,7 +348,8 @@ export class SlidingPieceStore {
 
   put(index: number, buf: Uint8Array, cb: Callback = () => {}): void {
     if (this.closed) {
-      return cb(new Error('Piece store is closed'));
+      cb(new Error('Piece store is closed'));
+      return;
     }
 
     const file = this.piecePath(index);
@@ -365,7 +365,8 @@ export class SlidingPieceStore {
           this.writing.delete(index);
           if (this.closed || stale) {
             void rm(file, { force: true }).catch(() => {});
-            return cb(new Error('Piece store is closed'));
+            cb(new Error('Piece store is closed'));
+            return;
           }
           this.present.set(index, buf.length);
           this.cache.added(this, index, buf.length);
@@ -386,21 +387,27 @@ export class SlidingPieceStore {
   ): void {
     // The chunk store API allows the callback in place of the options.
     if (typeof opts === 'function') {
-      return this.get(index, null, opts);
+      this.get(index, null, opts);
+      return;
     }
     const callback = cb ?? (() => {});
 
     const size = this.present.get(index);
     if (size === undefined) {
-      return callback(new Error(`Piece ${index} is not stored`));
+      callback(new Error(`Piece ${index} is not stored`));
+      return;
     }
 
     const offset = opts?.offset ?? 0;
     const length = opts?.length ?? size - offset;
     this.cache.touched(this, index);
     readPiece(this.piecePath(index), offset, length).then(
-      (buf) => callback(null, buf),
-      (err: Error) => callback(err),
+      (buf) => {
+        callback(null, buf);
+      },
+      (err: Error) => {
+        callback(err);
+      },
     );
   }
 
@@ -414,14 +421,19 @@ export class SlidingPieceStore {
 
   destroy(cb: Callback = () => {}): void {
     if (this.closed) {
-      return cb(null);
+      cb(null);
+      return;
     }
     this.closed = true;
     this.cache.removed(this, this.present.keys());
     this.present.clear();
     rm(this.directory, { recursive: true, force: true }).then(
-      () => cb(null),
-      (err: Error) => cb(err),
+      () => {
+        cb(null);
+      },
+      (err: Error) => {
+        cb(err);
+      },
     );
   }
 

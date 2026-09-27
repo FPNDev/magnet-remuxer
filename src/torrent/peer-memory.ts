@@ -81,7 +81,7 @@ export class PeerMemory {
       })
       .filter((peer): peer is string => peer !== undefined)
       .slice(0, REMEMBERED_PEERS);
-    if (!serving.length) {
+    if (serving.length === 0) {
       return false;
     }
     await this.flights.run(torrent.infoHash, undefined, () =>

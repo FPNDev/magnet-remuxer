@@ -9,7 +9,7 @@ declare module 'webtorrent/lib/peer.js' {
   export interface Peer {
     swarm: PeerSwarm | null;
     destroyed: boolean;
-    handshake(): void;
+    handshake: (this: Peer) => void;
     destroy(err?: Error): void;
   }
 

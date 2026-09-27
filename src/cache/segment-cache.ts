@@ -39,7 +39,7 @@ export class SegmentCache {
       if (entry.name.endsWith(TEMP_SUFFIX)) {
         await rm(file, { force: true });
       } else if (isSegmentFile(entry.name)) {
-        const info = await stat(file).catch(() => undefined);
+        const info = await stat(file).catch(() => {});
         if (info) {
           segments.push({ file, bytes: info.size, mtimeMs: info.mtimeMs });
         }

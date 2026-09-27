@@ -1,15 +1,15 @@
 import { HttpError } from '../errors.js';
 
-const HEX_HASH = /^[0-9a-f]{40}$/i;
+const HEX_HASH = /^[0-9a-f]{40}$/iu;
 // A magnet carries the info hash as 40 hex characters or as 32 base32
 // characters. Everything downstream uses the hex form.
-const BASE32_HASH = /^[a-z2-7]{32}$/i;
+const BASE32_HASH = /^[a-z2-7]{32}$/iu;
 const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
 // Lower case only: hashes are normalised before they reach a cache path or
 // a request path.
 export function isInfoHash(value: string): boolean {
-  return /^[0-9a-f]{40}$/.test(value);
+  return /^[0-9a-f]{40}$/u.test(value);
 }
 
 export function parseInfoHash(magnet: string): string {
@@ -24,7 +24,7 @@ export function parseInfoHash(magnet: string): string {
   }
 
   for (const xt of url.searchParams.getAll('xt')) {
-    const hash = /^urn:btih:(.+)$/i.exec(xt)?.[1];
+    const hash = /^urn:btih:(.+)$/iu.exec(xt)?.[1];
     if (!hash) {
       continue;
     }

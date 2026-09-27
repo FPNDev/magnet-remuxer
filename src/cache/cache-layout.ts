@@ -2,7 +2,7 @@ import path from 'node:path';
 
 // Numbered segments, the only evictable files. Playlists and init segments are
 // excluded so eviction never breaks a rendition's entry points.
-const SEGMENT_FILE = /^\d+\.(m4s|vtt)$/;
+const SEGMENT_FILE = /^\d+\.(m4s|vtt)$/u;
 
 export function isSegmentFile(name: string): boolean {
   return SEGMENT_FILE.test(name);

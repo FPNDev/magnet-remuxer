@@ -63,7 +63,9 @@ export class TorrentFileSource implements ByteSource {
     const watchdog = new StallWatchdog({
       stallMs: this.options.stallMs,
       progress: () => this.torrent.downloaded,
-      onWait: () => this.waiting(start, end),
+      onWait: () => {
+        this.waiting(start, end);
+      },
       onStall: () => this.stalled(start, end),
     });
     watchdog.once('close', unpin);
@@ -73,12 +75,16 @@ export class TorrentFileSource implements ByteSource {
       this.select(first, last, priority);
       // Without the deselect the torrent keeps downloading ahead for a reader
       // that has gone.
-      watchdog.once('close', () => this.select(first, last));
+      watchdog.once('close', () => {
+        this.select(first, last);
+      });
     }
     if (signal) {
       const stop = () => watchdog.destroy(asError(signal.reason));
       signal.addEventListener('abort', stop, { once: true });
-      watchdog.once('close', () => signal.removeEventListener('abort', stop));
+      watchdog.once('close', () => {
+        signal.removeEventListener('abort', stop);
+      });
     }
 
     // The watchdog emits the failure to its own reader. This catch only keeps
@@ -142,7 +148,9 @@ class StallWatchdog extends Transform {
     super();
     this.mark = options.progress();
     this.restart();
-    this.once('close', () => clearTimeout(this.timer));
+    this.once('close', () => {
+      clearTimeout(this.timer);
+    });
   }
 
   override _transform(
@@ -162,7 +170,9 @@ class StallWatchdog extends Transform {
   private restart(): void {
     clearTimeout(this.timer);
     this.mark = this.options.progress();
-    this.timer = setTimeout(() => this.check(), this.options.stallMs);
+    this.timer = setTimeout(() => {
+      this.check();
+    }, this.options.stallMs);
   }
 
   private check(): void {

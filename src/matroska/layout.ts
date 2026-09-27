@@ -214,7 +214,6 @@ export async function readMatroskaLayout(
         return element;
       }
     }
-    return undefined;
   };
   info ??= await bySeek(Id.Info);
   tracks ??= await bySeek(Id.Tracks);
@@ -273,8 +272,10 @@ export async function readMatroskaLayout(
     tracks: parseTracks(tracks.data, asElement(tracks)),
     // Rebase cue positions to absolute file offsets for the piece reader.
     cues: parseCues(cues.data, asElement(cues)).map((cue) => ({
-      ...cue,
+      time: cue.time,
+      track: cue.track,
       clusterPosition: segmentStart + cue.clusterPosition,
+      relativePosition: cue.relativePosition,
     })),
   };
 }

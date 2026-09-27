@@ -44,14 +44,14 @@ function logLevel(name: string, fallback: LogLevel): LogLevel {
 // Read once at import. A malformed number throws here, so a bad value stops
 // the process at startup rather than mid-request.
 export const config = {
-  host: env.HOST || '127.0.0.1',
+  host: env.HOST ?? '127.0.0.1',
   port: number('PORT', 3000),
-  ffmpegPath: env.FFMPEG_PATH || 'ffmpeg',
+  ffmpegPath: env.FFMPEG_PATH ?? 'ffmpeg',
   certFile: path.resolve(import.meta.dirname, required('CERT_FILE')),
   certKey: path.resolve(import.meta.dirname, required('CERT_KEY')),
   logLevel: logLevel('LOG_LEVEL', 'info'),
   cacheDir: path.resolve(
-    env.CACHE_DIR || path.join(os.tmpdir(), 'magnet-cache'),
+    env.CACHE_DIR ?? path.join(os.tmpdir(), 'magnet-cache'),
   ),
 
   pieceCacheBytes: number('PIECE_CACHE_MB', 8192) * MiB,

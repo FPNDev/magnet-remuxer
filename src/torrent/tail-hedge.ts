@@ -76,7 +76,9 @@ export class TailHedge {
       return;
     }
     const swarm = asSwarmTorrent(torrent);
-    const timer = setInterval(() => this.sweep(swarm), TICK_MS);
+    const timer = setInterval(() => {
+      this.sweep(swarm);
+    }, TICK_MS);
     timer.unref();
     this.states.set(torrent.infoHash, {
       torrent: swarm,
@@ -85,7 +87,9 @@ export class TailHedge {
       inFlight: 0,
       stats: { issued: 0, endgame: 0, won: 0, late: 0, wastedBytes: 0 },
     });
-    torrent.once('close', () => this.detach(torrent.infoHash));
+    torrent.once('close', () => {
+      this.detach(torrent.infoHash);
+    });
   }
 
   detach(infoHash: string): void {
@@ -195,7 +199,7 @@ export class TailHedge {
       { request: BlockRequest; owner: SwarmWire }
     >();
     const heads = headPieces(torrent, HEAD_DEPTH);
-    if (!heads.size) {
+    if (heads.size === 0) {
       return found;
     }
     for (const wire of wiresOf(torrent)) {
@@ -317,7 +321,11 @@ export class TailHedge {
     };
 
     // The owner answered while the hedge was in flight.
-    if (!held || held.missing === 0 || held.get((offset / BLOCK_LENGTH) | 0)) {
+    if (
+      !held ||
+      held.missing === 0 ||
+      held.get(Math.trunc(offset / BLOCK_LENGTH))
+    ) {
       waste();
       return;
     }

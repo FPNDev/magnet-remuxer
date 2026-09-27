@@ -38,9 +38,9 @@ const VIDEO_CODECS: Record<string, VideoCodec> = {
 
 // Copied into fMP4 untouched. A_AAC is a prefix match because its profile
 // suffixes vary; the rest must match exactly. Other audio is transcoded.
-const COPYABLE_AUDIO = /^(A_AAC|A_MPEG\/L3$|A_OPUS$|A_FLAC$)/;
+const COPYABLE_AUDIO = /^(A_AAC|A_MPEG\/L3$|A_OPUS$|A_FLAC$)/u;
 // No usable decode path, so these tracks get no rendition at all.
-const UNSUPPORTED_AUDIO = /^(A_REAL\/|A_QUICKTIME)/;
+const UNSUPPORTED_AUDIO = /^(A_REAL\/|A_QUICKTIME)/u;
 // Only text subtitles convert to WebVTT. Bitmap formats such as PGS and
 // VobSub would have to be rendered, so they are skipped.
 const TEXT_SUBTITLES = new Set([
@@ -54,9 +54,9 @@ const TEXT_SUBTITLES = new Set([
 ]);
 
 // Rates the AAC encoder accepts. Anything else is resampled to 48 kHz.
-const AAC_SAMPLE_RATES = [
+const AAC_SAMPLE_RATES = new Set([
   48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000,
-];
+]);
 const MAX_AAC_CHANNELS = 6;
 
 // RFC 6381 strings for the audio that is copied rather than transcoded.
@@ -97,7 +97,7 @@ export function getRenditions(index: MediaIndex): RenditionSet {
 
 export function aacSampleRate(track: MkvTrack): number {
   const rate = Math.round(track.sampleRate ?? 48000);
-  return AAC_SAMPLE_RATES.includes(rate) ? rate : 48000;
+  return AAC_SAMPLE_RATES.has(rate) ? rate : 48000;
 }
 
 export function aacChannels(track: MkvTrack): number {

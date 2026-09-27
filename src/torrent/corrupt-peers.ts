@@ -17,7 +17,7 @@ const STRIKE_TTL_MS = 30 * 60_000;
 const TRACKED_PIECES = 512;
 
 // webtorrent reports a hash failure only as a warning string.
-const FAILED_PIECE = /Piece (\d+) failed verification/;
+const FAILED_PIECE = /Piece (\d+) failed verification/u;
 
 export interface CorruptPeersOptions {
   enabled: boolean;
@@ -66,7 +66,9 @@ export class CorruptPeers {
       const sender = wire as SwarmWire;
       (wire as { on(event: string, cb: (index: number) => void): void }).on(
         'piece',
-        (index: number) => this.record(state, index, sender),
+        (index: number) => {
+          this.record(state, index, sender);
+        },
       );
     };
     const onVerified = (index: number) => state.senders.delete(index);
@@ -89,7 +91,9 @@ export class CorruptPeers {
     };
 
     this.states.set(infoHash, state);
-    torrent.once('close', () => this.detach(infoHash));
+    torrent.once('close', () => {
+      this.detach(infoHash);
+    });
   }
 
   detach(infoHash: string): void {

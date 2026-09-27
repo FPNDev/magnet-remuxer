@@ -214,7 +214,7 @@ export class DiskGuard {
       const measured = await Promise.all(
         batch.map(async (entry) => {
           const file = path.join(entry.parentPath, entry.name);
-          const info = await stat(file).catch(() => undefined);
+          const info = await stat(file).catch(() => {});
           return { name: entry.name, file, info };
         }),
       );

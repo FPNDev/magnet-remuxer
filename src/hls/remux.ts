@@ -288,10 +288,10 @@ function trackHeader(index: MediaIndex, rendition: Rendition): Buffer {
 }
 
 function copyArgs(rendition: VideoRendition | AudioRendition): string[] {
+  // HEVC in fMP4 must carry the hvc1 tag; players reject hev1 here.
   const tag =
     rendition.type === 'video' && rendition.codec === 'hevc'
-      ? // HEVC in fMP4 must carry the hvc1 tag; players reject hev1 here.
-        ['-tag:v', 'hvc1']
+      ? ['-tag:v', 'hvc1']
       : [];
   return [...INPUT_ARGS, '-c', 'copy', ...tag, ...FMP4_OUTPUT_ARGS];
 }
@@ -434,8 +434,8 @@ function boundaryError(n: number): Error {
 function toHlsWebVtt(output: Buffer): string {
   const body = output
     .toString('utf8')
-    .replace(/^﻿?WEBVTT[^\n]*\n?/, '')
-    .replace(/^\n+/, '');
+    .replace(/^﻿?WEBVTT[^\n]*\n?/u, '')
+    .replace(/^\n+/u, '');
   const mpegTs = TIMELINE_OFFSET_SECONDS * 90000;
   return `WEBVTT\nX-TIMESTAMP-MAP=MPEGTS:${mpegTs},LOCAL:00:00:00.000\n\n${body}`;
 }

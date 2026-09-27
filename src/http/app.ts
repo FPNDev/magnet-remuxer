@@ -55,8 +55,6 @@ export function createApp({ hls, status }: AppDependencies): express.Express {
     res.json(status());
   });
 
-  // The info hash, the file index and every path segment come from the
-  // client. HlsService.resolve checks all three before a path is built.
   app.get('/:infoHash/:fileIndex/*path', async (req, res) => {
     const { infoHash, fileIndex } = req.params;
     const parts = ([] as string[]).concat(req.params.path);
@@ -64,8 +62,6 @@ export function createApp({ hls, status }: AppDependencies): express.Express {
     await sendFile(res, file);
   });
 
-  // Express 5 forwards a thrown error to the middleware below, so an
-  // unmatched route answers with the same JSON shape as a failed one.
   app.use(() => {
     throw new HttpError(404, 'Not found');
   });

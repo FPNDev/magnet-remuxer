@@ -282,14 +282,13 @@ export class Asset {
 
   // Counts the caller as a waiter on key, so the queue can rank the work and
   // abandon it once the last waiter is gone.
-  private async awaited<T>(
-    key: string,
-    work: () => FlightResponse<T>,
-  ): Promise<T> {
-    return await untilAborted(
+  private awaited<T>(key: string, work: () => FlightResponse<T>): Promise<T> {
+    return untilAborted(
       work,
       () => new RequestAbandonedError(`Nobody is waiting for ${key}`),
-      () => this.options.queue.abandon(key),
+      () => {
+        this.options.queue.abandon(key);
+      },
     );
   }
 }

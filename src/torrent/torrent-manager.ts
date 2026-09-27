@@ -74,7 +74,9 @@ export class TorrentManager {
     this.client.on('error', (err) => {
       logger.error('WebTorrent client error', { error: errorMessage(err) });
     });
-    this.sweepTimer = setInterval(() => this.sweep(), SWEEP_INTERVAL_MS);
+    this.sweepTimer = setInterval(() => {
+      this.sweep();
+    }, SWEEP_INTERVAL_MS);
     this.sweepTimer.unref();
   }
 
@@ -98,13 +100,13 @@ export class TorrentManager {
     if (saved) {
       return saved;
     }
-    return this.use(infoHash, async (torrent) => describe(torrent));
+    return this.use(infoHash, (torrent) => Promise.resolve(describe(torrent)));
   }
 
   // Refreshes a torrent that is already known. It never revives one the
   // sweep has forgotten.
   touch(infoHash: string): void {
-    if (this.lastUsed.has(infoHash) || this.find(infoHash)) {
+    if (this.lastUsed.has(infoHash) || this.findTorrent(infoHash)) {
       this.lastUsed.set(infoHash, Date.now());
     }
   }
@@ -190,7 +192,7 @@ export class TorrentManager {
     const now = Date.now();
     for (const [infoHash, used] of this.lastUsed) {
       if (
-        !this.find(infoHash) &&
+        !this.findTorrent(infoHash) &&
         !this.busy(infoHash) &&
         now - used >= this.options.idleMs
       ) {
@@ -220,14 +222,18 @@ export class TorrentManager {
         .filter((torrent) => torrent.infoHash && torrent.ready)
         .map((torrent) => this.peers.flush(torrent)),
     );
-    await new Promise<void>((resolve) => this.client.destroy(() => resolve()));
+    await new Promise<void>((resolve) => {
+      this.client.destroy(() => {
+        resolve();
+      });
+    });
   }
 
   private busy(infoHash: string): boolean {
     return this.leases.has(infoHash) || this.pending.has(infoHash);
   }
 
-  private find(infoHash: string): Torrent | undefined {
+  private findTorrent(infoHash: string): Torrent | undefined {
     return this.client.torrents.find(
       (torrent) => torrent.infoHash === infoHash,
     );
@@ -244,7 +250,7 @@ export class TorrentManager {
           await leaving;
           continue;
         }
-        const existing = this.find(infoHash);
+        const existing = this.findTorrent(infoHash);
         if (existing?.ready && !isDestroyed(existing)) {
           return existing;
         }
@@ -266,8 +272,8 @@ export class TorrentManager {
   private async add(infoHash: string): Promise<Torrent> {
     const { layout, pieces, metadataTimeoutMs } = this.options;
     const [metadata, magnet, remembered, banned] = await Promise.all([
-      readFile(layout.torrentFile(infoHash)).catch(() => undefined),
-      readFile(layout.magnetFile(infoHash), 'utf8').catch(() => undefined),
+      readFile(layout.torrentFile(infoHash)).catch(() => {}),
+      readFile(layout.magnetFile(infoHash), 'utf8').catch(() => {}),
       this.peers.saved(infoHash).catch(() => []),
       this.bans.saved(infoHash),
       // Prepared alongside the reads; it has no result to destructure.
@@ -320,7 +326,9 @@ export class TorrentManager {
           : advertised.buffer;
         bitfield(new Uint8Array(view.byteLength));
       };
-      peer.haveAll = () => peer.haveNone();
+      peer.haveAll = () => {
+        peer.haveNone();
+      };
       peer.have = () => {};
       peer.unchoke = () => {};
     });
@@ -335,7 +343,7 @@ export class TorrentManager {
         ...remembered,
       ]),
     ];
-    if (peers.length) {
+    if (peers.length > 0) {
       // Peers can only be added once the info hash is known.
       torrent.once('infoHash', () => {
         for (const peer of peers) {
@@ -427,7 +435,9 @@ export class TorrentManager {
     this.peers.forget(infoHash);
     torrent.pause();
     await new Promise<void>((resolve) => {
-      torrent.destroy({ destroyStore: false }, () => resolve());
+      torrent.destroy({ destroyStore: false }, () => {
+        resolve();
+      });
     });
   }
 }
@@ -463,19 +473,20 @@ function waitUntilReady(torrent: Torrent, timeoutMs: number): Promise<void> {
         resolve();
       }
     };
-    const onReady = () => finish();
-    const onError = (err: Error | string) =>
+    const onReady = () => {
+      finish();
+    };
+    const onError = (err: Error | string) => {
       finish(err instanceof Error ? err : new Error(err));
-    const timer = setTimeout(
-      () =>
-        finish(
-          new HttpError(
-            504,
-            'Timed out waiting for torrent metadata; it may have no peers',
-          ),
+    };
+    const timer = setTimeout(() => {
+      finish(
+        new HttpError(
+          504,
+          'Timed out waiting for torrent metadata; it may have no peers',
         ),
-      timeoutMs,
-    );
+      );
+    }, timeoutMs);
 
     torrent.once('ready', onReady);
     torrent.once('error', onError);

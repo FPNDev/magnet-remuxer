@@ -89,19 +89,19 @@ export class FfmpegSupervisor {
       });
     });
 
-    const onAbort = () => kill(run.signal!.reason);
+    const onAbort = () => {
+      kill(run.signal!.reason);
+    };
     run.signal?.addEventListener('abort', onAbort, { once: true });
     const timer = run.timeoutMs
-      ? setTimeout(
-          () =>
-            kill(
-              new FfmpegError(
-                `ffmpeg timed out after ${run.timeoutMs} ms`,
-                stderr,
-              ),
+      ? setTimeout(() => {
+          kill(
+            new FfmpegError(
+              `ffmpeg timed out after ${run.timeoutMs} ms`,
+              stderr,
             ),
-          run.timeoutMs,
-        )
+          );
+        }, run.timeoutMs)
       : undefined;
 
     if (run.input) {
@@ -112,9 +112,10 @@ export class FfmpegSupervisor {
       });
     }
     const outputs = run.output ? [run.output].flat() : [];
-    const writing = outputs.length
-      ? pipeline(child.stdout!, ...(outputs as [Writable, ...Writable[]]))
-      : Promise.resolve();
+    const writing =
+      outputs.length > 0
+        ? pipeline(child.stdout!, ...(outputs as [Writable, ...Writable[]]))
+        : Promise.resolve();
 
     try {
       const [code] = await Promise.all([closed, writing]);

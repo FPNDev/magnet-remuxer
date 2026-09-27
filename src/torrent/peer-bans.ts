@@ -29,7 +29,7 @@ export class PeerBans {
   async saved(infoHash: string): Promise<Record<string, number>> {
     const saved = await readJson<Record<string, number>>(
       this.layout.bannedFile(infoHash),
-    ).catch(() => undefined);
+    ).catch(() => {});
     return saved ?? {};
   }
 
@@ -148,7 +148,7 @@ export class PeerBans {
         .filter(([, ban]) => ban.keep && ban.until > now)
         .map(([address, ban]) => [address, ban.until]),
     );
-    if (!Object.keys(keeping).length) {
+    if (Object.keys(keeping).length === 0) {
       return;
     }
     await writeFileAtomic(

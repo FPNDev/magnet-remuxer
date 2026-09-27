@@ -44,7 +44,7 @@ export interface ServedFile {
   cacheControl: string;
 }
 
-const SEGMENT_NAME = /^(\d+)\.(m4s|vtt)$/;
+const SEGMENT_NAME = /^(\d+)\.(m4s|vtt)$/u;
 
 const PLAYLIST_TYPE = 'application/vnd.apple.mpegurl';
 // Files under infoHash cannot change, therefore we can cache indefinitely
@@ -141,7 +141,10 @@ export class HlsService {
     return {
       ...info,
       files: info.files.map((file) => ({
-        ...file,
+        index: file.index,
+        name: file.name,
+        path: file.path,
+        length: file.length,
         playable: MATROSKA_FILE.test(file.name),
       })),
     };
@@ -283,7 +286,9 @@ export class HlsService {
   private startEagerly(infoHash: string, fileIndex: number): void {
     this.registry
       .get(infoHash, fileIndex)
-      .then((asset) => asset.eagerStart())
+      .then((asset) => {
+        asset.eagerStart();
+      })
       .catch(() => {});
   }
 
@@ -335,14 +340,13 @@ export class HlsService {
 
   // Counts the request as a waiter on key, so the queue can drop the work
   // when the client leaves.
-  private async awaited<T>(
-    key: string,
-    work: () => FlightResponse<T>,
-  ): Promise<T> {
-    return await untilAborted(
+  private awaited<T>(key: string, work: () => FlightResponse<T>): Promise<T> {
+    return untilAborted(
       work,
       () => new RequestAbandonedError(`User stopped waiting for ${key}`),
-      () => this.options.queue.abandon(key),
+      () => {
+        this.options.queue.abandon(key);
+      },
     );
   }
 
@@ -365,7 +369,7 @@ export class HlsService {
 }
 
 function parseNumber(value: string, status: number, what: string): number {
-  if (!/^\d+$/.test(value)) {
+  if (!/^\d+$/u.test(value)) {
     throw new HttpError(status, `Invalid ${what} "${value}"`);
   }
   return Number(value);

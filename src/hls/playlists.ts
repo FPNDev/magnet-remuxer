@@ -174,7 +174,9 @@ export function masterPlaylist(
   }
 
   const { track } = renditions.video;
-  const codecs = [renditions.video, ...renditions.audio].map(codecString);
+  const codecs = [renditions.video, ...renditions.audio].map((rendition) =>
+    codecString(rendition),
+  );
   const averageBandwidth = Math.round((index.fileLength * 8) / index.duration);
   namesMap.clear();
 
@@ -191,16 +193,12 @@ export function masterPlaylist(
       AUTOSELECT: 'YES',
       URI: quoted(uri(renditions.video)),
     })}`,
-  );
-
-  lines.push(
     `#EXT-X-STREAM-INF:${attributes({
       BANDWIDTH: String(Math.round(averageBandwidth * 1.5)),
       'AVERAGE-BANDWIDTH': String(averageBandwidth),
-      AUDIO: renditions.audio.length ? quoted(AUDIO_GROUP) : undefined,
-      SUBTITLES: renditions.subtitles.length
-        ? quoted(SUBTITLE_GROUP)
-        : undefined,
+      AUDIO: renditions.audio.length > 0 ? quoted(AUDIO_GROUP) : undefined,
+      SUBTITLES:
+        renditions.subtitles.length > 0 ? quoted(SUBTITLE_GROUP) : undefined,
       VIDEO: quoted(VIDEO_GROUP),
       'CLOSED-CAPTIONS': 'NONE',
       RESOLUTION:
@@ -227,7 +225,7 @@ function attributes(values: Record<string, string | undefined>): string {
 // A quoted attribute value may hold neither a double quote nor a line
 // break.
 function quoted(value: string): string {
-  return `"${value.replace(/["\r\n]/g, "'")}"`;
+  return `"${value.replaceAll(/["\r\n]/gu, "'")}"`;
 }
 
 function optionalQuoted(value: string | undefined): string | undefined {
@@ -251,7 +249,7 @@ function uniqueLabel(track: MkvTrack, used: Map<string, number>): string {
       label = undefined;
     }
   }
-  label ||= `Unknown`;
+  label ??= `Unknown`;
 
   const usedTimes = (used.get(label) ?? 0) + 1;
   if (usedTimes > 1) {

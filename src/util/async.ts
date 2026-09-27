@@ -10,8 +10,12 @@ export function withTimeout<T>(
   onTimeout: () => Error,
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(onTimeout()), timeoutMs);
-    promise.then(resolve, reject).finally(() => clearTimeout(timer));
+    const timer = setTimeout(() => {
+      reject(onTimeout());
+    }, timeoutMs);
+    promise.then(resolve, reject).finally(() => {
+      clearTimeout(timer);
+    });
   });
 }
 

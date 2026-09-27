@@ -96,7 +96,9 @@ export class PeerChurn {
       return;
     }
     const swarm = asSwarmTorrent(torrent);
-    const timer = setInterval(() => this.sweep(swarm), TICK_MS);
+    const timer = setInterval(() => {
+      this.sweep(swarm);
+    }, TICK_MS);
     timer.unref();
     const state: TorrentState = {
       torrent: swarm,
@@ -118,7 +120,9 @@ export class PeerChurn {
     state.restore = () => torrent.removeListener('wire', onWire);
     torrent.on('wire', onWire);
     this.states.set(torrent.infoHash, state);
-    torrent.once('close', () => this.detach(torrent.infoHash));
+    torrent.once('close', () => {
+      this.detach(torrent.infoHash);
+    });
   }
 
   detach(infoHash: string): void {
@@ -183,7 +187,7 @@ export class PeerChurn {
 
     // With nothing selected, or nobody queued for a connection slot, a drop
     // only loses swarm.
-    if (!torrent._selections.length || torrent._numQueued <= 0) {
+    if (torrent._selections.length === 0 || torrent._numQueued <= 0) {
       return;
     }
 
@@ -194,7 +198,7 @@ export class PeerChurn {
         candidates.push(candidate);
       }
     }
-    if (!candidates.length) {
+    if (candidates.length === 0) {
       return;
     }
 

@@ -54,7 +54,7 @@ export class WarmQueue {
   private pump(): void {
     while (
       this.running.size < this.options.concurrency &&
-      this.backlog.length
+      this.backlog.length > 0
     ) {
       const next = this.backlog.shift()!;
       const key = warmKey(next.infoHash, next.fileIndex);
