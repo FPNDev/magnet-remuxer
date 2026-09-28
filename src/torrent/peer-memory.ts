@@ -5,7 +5,7 @@ import { errorMessage, logger } from '../logger.js';
 import { readJson, writeFileAtomic } from '../util/fs.js';
 import { SingleFlight } from '../util/single-flight.js';
 
-const REMEMBERED_PEERS = 30;
+const REMEMBERED_PEERS = 50;
 // One save per torrent per interval. The claim is released when nothing was
 // written, so the next call may try again straight away.
 const SAVE_INTERVAL_MS = 60_000;
