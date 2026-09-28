@@ -41,6 +41,7 @@ const VIDEO_CODECS: Record<string, VideoCodec> = {
 const COPYABLE_AUDIO = /^(A_AAC|A_MPEG\/L3$|A_OPUS$|A_FLAC$)/u;
 // No usable decode path, so these tracks get no rendition at all.
 const UNSUPPORTED_AUDIO = /^(A_REAL\/|A_QUICKTIME)/u;
+const UNSUPPORTED_LANGUAGES = new Set(['ru', 'rus']);
 // Only text subtitles convert to WebVTT. Bitmap formats such as PGS and
 // VobSub would have to be rendered, so they are skipped.
 const TEXT_SUBTITLES = new Set([
@@ -83,14 +84,24 @@ export function getRenditions(index: MediaIndex): RenditionSet {
   return {
     video: { type: 'video', track: video, codec },
     audio: index.tracks
-      .filter((t) => t.kind === 'audio' && !UNSUPPORTED_AUDIO.test(t.codecId))
+      .filter(
+        (t) =>
+          t.kind === 'audio' &&
+          !UNSUPPORTED_LANGUAGES.has(t.language) &&
+          !UNSUPPORTED_AUDIO.test(t.codecId),
+      )
       .map((track): AudioRendition => ({
         type: 'audio',
         track,
         transcode: !COPYABLE_AUDIO.test(track.codecId),
       })),
     subtitles: index.tracks
-      .filter((t) => t.kind === 'subtitle' && TEXT_SUBTITLES.has(t.codecId))
+      .filter(
+        (t) =>
+          t.kind === 'subtitle' &&
+          !UNSUPPORTED_LANGUAGES.has(t.language) &&
+          TEXT_SUBTITLES.has(t.codecId),
+      )
       .map((track): SubtitleRendition => ({ type: 'subtitle', track })),
   };
 }
