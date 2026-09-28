@@ -45,7 +45,7 @@ peer when the first goes quiet.
 
 ## Requirements
 
-- Node 20.12 or newer.
+- Node 22 or newer (tested on 24.21.0).
 - ffmpeg on `PATH`, or `FFMPEG_PATH` pointing at the binary. One process runs
   per segment, so it has to be a real install rather than a shim.
 - Disk under `CACHE_DIR`. The default budgets add up to 25 GiB.
