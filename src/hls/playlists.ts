@@ -4,6 +4,7 @@ import {
   type Rendition,
   type RenditionSet,
 } from '../media/codecs.js';
+import { hevcTransferCharacteristics } from '../media/hevc.js';
 import {
   segmentCount,
   segmentEnd,
@@ -15,6 +16,7 @@ import type { MkvTrack } from '../matroska/tracks.js';
 const AUDIO_GROUP = 'audio';
 const SUBTITLE_GROUP = 'subs';
 const VIDEO_GROUP = 'video';
+const VIDEO_RANGES: Record<number, string> = { 16: 'PQ', 18: 'HLG' };
 
 // HLS wants BCP 47 language tags. Matroska carries ISO 639-2, which has
 // both a bibliographic and a terminological code for some languages.
@@ -208,6 +210,12 @@ export function masterPlaylist(
       'FRAME-RATE': track.defaultDurationNs
         ? (1e9 / track.defaultDurationNs).toFixed(3)
         : undefined,
+      // Firefox's MediaCapabilities rejects every av01 codec string paired with
+      // a PQ or HLG transfer function, but runs no such check on HEVC strings.
+      'VIDEO-RANGE':
+        renditions.video.codec === 'hevc'
+          ? VIDEO_RANGES[hevcTransferCharacteristics(track)]
+          : undefined,
     })}`,
     uri(renditions.video),
   );

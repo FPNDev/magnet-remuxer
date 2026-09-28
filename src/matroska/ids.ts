@@ -30,6 +30,8 @@ export const Id = {
   Video: 0xe0,
   PixelWidth: 0xb0,
   PixelHeight: 0xba,
+  Colour: 0x55b0,
+  TransferCharacteristics: 0x55ba,
   Audio: 0xe1,
   SamplingFrequency: 0xb5,
   Channels: 0x9f,

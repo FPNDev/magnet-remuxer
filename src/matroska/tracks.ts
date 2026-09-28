@@ -25,6 +25,7 @@ export type MkvTrack = {
   defaultDurationNs?: number | undefined;
   width?: number | undefined;
   height?: number | undefined;
+  transferCharacteristics?: number | undefined;
   sampleRate?: number | undefined;
   channels?: number | undefined;
   // The TrackEntry element verbatim, base64. Lets a rebuilt header carry the
@@ -117,6 +118,14 @@ function parseTrackEntry(buf: Uint8Array, entry: EbmlElement): MkvTrack | null {
           }
           if (v.id === Id.PixelHeight) {
             track.height = readUint(buf, v);
+          }
+          if (v.id === Id.Colour) {
+            const transfer = [
+              ...childElements(buf, v.dataStart, v.dataEnd),
+            ].find((c) => c.id === Id.TransferCharacteristics);
+            track.transferCharacteristics = transfer
+              ? readUint(buf, transfer)
+              : undefined;
           }
         }
         break;
