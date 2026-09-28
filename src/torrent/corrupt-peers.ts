@@ -135,7 +135,16 @@ export class CorruptPeers {
 
     // The peer that sent the most blocks of the piece is the likeliest source
     // of the bad ones.
-    const [wire, blocks] = [...senders].sort((a, b) => b[1] - a[1])[0]!;
+    let wire!: SwarmWire;
+    let blocks = 0;
+    let sent = 0;
+    for (const [sender, count] of senders) {
+      sent += count;
+      if (count > blocks) {
+        wire = sender;
+        blocks = count;
+      }
+    }
     const sole = senders.size === 1;
     const address = addressOf(wire);
     if (!address) {
@@ -151,7 +160,7 @@ export class CorruptPeers {
       piece: index,
       blamed: address,
       blocks,
-      of: [...senders.values()].reduce((sum, count) => sum + count, 0),
+      of: sent,
       strikes,
     });
     if (!sole && strikes < STRIKES) {

@@ -224,10 +224,14 @@ export function masterPlaylist(
 }
 
 function attributes(values: Record<string, string | undefined>): string {
-  return Object.entries(values)
-    .filter(([, value]) => value !== undefined)
-    .map(([key, value]) => `${key}=${value}`)
-    .join(',');
+  const pairs: string[] = [];
+  for (const [key, value] of Object.entries(values)) {
+    if (value !== undefined) {
+      pairs.push(`${key}=${value}`);
+    }
+  }
+
+  return pairs.join(',');
 }
 
 // A quoted attribute value may hold neither a double quote nor a line

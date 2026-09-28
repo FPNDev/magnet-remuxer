@@ -81,28 +81,32 @@ export function getRenditions(index: MediaIndex): RenditionSet {
     );
   }
 
-  return {
-    video: { type: 'video', track: video, codec },
-    audio: index.tracks
-      .filter(
-        (t) =>
-          t.kind === 'audio' &&
-          !UNSUPPORTED_LANGUAGES.has(t.language) &&
-          !UNSUPPORTED_AUDIO.test(t.codecId),
-      )
-      .map((track): AudioRendition => ({
+  const audio: AudioRendition[] = [];
+  const subtitles: SubtitleRendition[] = [];
+  for (const track of index.tracks) {
+    if (
+      track.kind === 'audio' &&
+      !UNSUPPORTED_LANGUAGES.has(track.language) &&
+      !UNSUPPORTED_AUDIO.test(track.codecId)
+    ) {
+      audio.push({
         type: 'audio',
         track,
         transcode: !COPYABLE_AUDIO.test(track.codecId),
-      })),
-    subtitles: index.tracks
-      .filter(
-        (t) =>
-          t.kind === 'subtitle' &&
-          !UNSUPPORTED_LANGUAGES.has(t.language) &&
-          TEXT_SUBTITLES.has(t.codecId),
-      )
-      .map((track): SubtitleRendition => ({ type: 'subtitle', track })),
+      });
+    } else if (
+      track.kind === 'subtitle' &&
+      !UNSUPPORTED_LANGUAGES.has(track.language) &&
+      TEXT_SUBTITLES.has(track.codecId)
+    ) {
+      subtitles.push({ type: 'subtitle', track });
+    }
+  }
+
+  return {
+    video: { type: 'video', track: video, codec },
+    audio,
+    subtitles,
   };
 }
 

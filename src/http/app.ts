@@ -94,10 +94,14 @@ function magnetFromQuery(req: Request): string {
     return magnet;
   }
 
-  const extras = parts
-    .slice(index + 1)
-    .filter((part) => !part.startsWith('file='));
-  return [magnet, ...extras].join('&');
+  const kept = [magnet];
+  for (const part of parts.slice(index + 1)) {
+    if (!part.startsWith('file=')) {
+      kept.push(part);
+    }
+  }
+
+  return kept.join('&');
 }
 
 /**

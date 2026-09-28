@@ -145,14 +145,17 @@ export class PeerBans {
 
   private async save(infoHash: string, state: TorrentBans): Promise<void> {
     const now = Date.now();
-    const keeping = Object.fromEntries(
-      [...state.bans]
-        .filter(([, ban]) => ban.keep && ban.until > now)
-        .map(([address, ban]) => [address, ban.until]),
-    );
+    const keeping: Record<string, number> = {};
+    for (const [address, ban] of state.bans) {
+      if (ban.keep && ban.until > now) {
+        keeping[address] = ban.until;
+      }
+    }
+
     if (Object.keys(keeping).length === 0) {
       return;
     }
+
     await writeFileAtomic(
       this.layout.bannedFile(infoHash),
       JSON.stringify(keeping),

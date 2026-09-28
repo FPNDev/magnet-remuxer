@@ -66,30 +66,35 @@ export class PeerMemory {
   }
 
   private async save(torrent: Torrent): Promise<boolean> {
-    const serving = torrent.wires
+    const serving: string[] = [];
+    for (const wire of torrent.wires) {
+      if (serving.length === REMEMBERED_PEERS) {
+        break;
+      }
+
+      const { remoteAddress, remotePort } = wire as {
+        remoteAddress?: string;
+        remotePort?: number;
+      };
+
       // A connection proves nothing. Only peers that sent bytes are worth
       // keeping.
-      .filter((wire) => wire.downloaded > 0)
-      .map((wire) => {
-        const { remoteAddress, remotePort } = wire as unknown as {
-          remoteAddress?: string;
-          remotePort?: number;
-        };
-        return remoteAddress && remotePort
-          ? `${remoteAddress}:${remotePort}`
-          : undefined;
-      })
-      .filter((peer): peer is string => peer !== undefined)
-      .slice(0, REMEMBERED_PEERS);
+      if (wire.downloaded > 0 && remoteAddress && remotePort) {
+        serving.push(`${remoteAddress}:${remotePort}`);
+      }
+    }
+
     if (serving.length === 0) {
       return false;
     }
+
     await this.flights.run(torrent.infoHash, undefined, () =>
       writeFileAtomic(
         this.layout.peersFile(torrent.infoHash),
         JSON.stringify(serving),
       ),
     ).promise;
+
     return true;
   }
 }

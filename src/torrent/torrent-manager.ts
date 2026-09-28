@@ -149,13 +149,14 @@ export class TorrentManager {
   }
 
   active(): Set<string> {
-    return new Set([
-      ...this.leases.keys(),
-      ...this.pending.keys(),
-      ...this.client.torrents
-        .map((torrent) => torrent.infoHash)
-        .filter((infoHash) => !!infoHash),
-    ]);
+    const infoHashes = new Set([...this.leases.keys(), ...this.pending.keys()]);
+    for (const torrent of this.client.torrents) {
+      if (torrent.infoHash) {
+        infoHashes.add(torrent.infoHash);
+      }
+    }
+
+    return infoHashes;
   }
 
   status() {
@@ -217,11 +218,14 @@ export class TorrentManager {
 
   async close(): Promise<void> {
     clearInterval(this.sweepTimer);
-    await Promise.all(
-      this.client.torrents
-        .filter((torrent) => torrent.infoHash && torrent.ready)
-        .map((torrent) => this.peers.flush(torrent)),
-    );
+    const flushes: Promise<void>[] = [];
+    for (const torrent of this.client.torrents) {
+      if (torrent.infoHash && torrent.ready) {
+        flushes.push(this.peers.flush(torrent));
+      }
+    }
+
+    await Promise.all(flushes);
     await new Promise<void>((resolve) => {
       this.client.destroy(() => {
         resolve();
@@ -359,51 +363,58 @@ export class TorrentManager {
       throw err;
     }
 
-    await pieces
+    try {
       // Pieces left from an earlier run are rehashed and kept, so a
       // restart does not download them again.
-      .adoptInto(torrent as unknown as AdoptableTorrent)
-      .then((adoption) => {
-        if (adoption.kept || adoption.dropped) {
-          logger.info('Reused cached pieces', {
-            infoHash,
-            kept: adoption.kept,
-            dropped: adoption.dropped,
-            hashedMiB: Math.round(adoption.hashedBytes / 2 ** 20),
-          });
-        }
-      })
-      .catch((err: unknown) => {
-        logger.warn('Could not reuse cached pieces', {
+      const adoption = await pieces.adoptInto(
+        torrent as unknown as AdoptableTorrent,
+      );
+
+      if (adoption.kept || adoption.dropped) {
+        logger.info('Reused cached pieces', {
           infoHash,
-          error: errorMessage(err),
+          kept: adoption.kept,
+          dropped: adoption.dropped,
+          hashedMiB: Math.round(adoption.hashedBytes / 2 ** 20),
         });
+      }
+    } catch (err) {
+      logger.warn('Could not reuse cached pieces', {
+        infoHash,
+        error: errorMessage(err),
       });
+    }
+
     this.hedge.attach(torrent);
     this.churn.attach(torrent);
+
     await this.persist(torrent).catch((err: unknown) => {
       logger.warn('Could not save torrent metadata', {
         infoHash,
         error: errorMessage(err),
       });
     });
+
     logger.info('Torrent ready', {
       infoHash,
       name: torrent.name,
       peers: torrent.numPeers,
     });
+
     return torrent;
   }
 
   private async persist(torrent: Torrent): Promise<void> {
     const { layout } = this.options;
     await mkdir(layout.torrentDir(torrent.infoHash), { recursive: true });
+
     if (!(await exists(layout.torrentFile(torrent.infoHash)))) {
       await writeFileAtomic(
         layout.torrentFile(torrent.infoHash),
         torrent.torrentFile,
       );
     }
+
     if (!(await exists(layout.infoFile(torrent.infoHash)))) {
       await writeFileAtomic(
         layout.infoFile(torrent.infoHash),
