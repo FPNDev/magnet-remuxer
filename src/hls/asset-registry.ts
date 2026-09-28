@@ -163,6 +163,7 @@ export class AssetRegistry {
     const index = await this.readIndex(infoHash, fileIndex, priority);
     await mkdir(mediaDir, { recursive: true });
     await writeFileAtomic(indexFile, JSON.stringify(index));
+
     return index;
   }
 
@@ -200,6 +201,7 @@ export class AssetRegistry {
             file.name,
             segmentDuration,
           );
+
           logger.info('Indexed media file', {
             infoHash,
             file: file.name,
@@ -208,6 +210,7 @@ export class AssetRegistry {
             tracks: index.tracks.length,
             ms: Date.now() - started,
           });
+
           return index;
         }),
     );
