@@ -114,6 +114,7 @@ export class AssetRegistry {
       readStallMs,
       warmSegments,
     } = this.options;
+
     return new Asset({
       infoHash,
       fileIndex,

@@ -77,6 +77,7 @@ export async function buildMediaIndex(
   const cues = layout.cues
     .filter((cue) => cue.track === video.number)
     .sort((a, b) => a.time - b.time);
+
   for (const cue of cues) {
     if (keyframes.at(-1)?.ts === cue.time) {
       continue;
@@ -87,6 +88,7 @@ export async function buildMediaIndex(
       rel: cue.relativePosition,
     });
   }
+
   if (keyframes.length === 0) {
     throw new MatroskaError('Cues index has no entries for the video track');
   }

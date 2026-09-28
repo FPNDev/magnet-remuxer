@@ -215,6 +215,7 @@ export async function readMatroskaLayout(
       }
     }
   };
+
   info ??= await bySeek(Id.Info);
   tracks ??= await bySeek(Id.Tracks);
   cues ??= await bySeek(Id.Cues);

@@ -82,6 +82,7 @@ export class PeerBans {
     if (!state) {
       return;
     }
+
     const until = Date.now() + ms;
     const existing = state.bans.get(address);
     state.bans.set(address, {
@@ -90,6 +91,7 @@ export class PeerBans {
       reason,
       keep: keep || (existing?.keep ?? false),
     });
+
     // Only bans worth surviving a restart are written, and the write is
     // debounced because they arrive in bursts.
     if (keep) {
