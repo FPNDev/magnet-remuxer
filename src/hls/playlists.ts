@@ -15,7 +15,6 @@ import type { MkvTrack } from '../matroska/tracks.js';
 
 const AUDIO_GROUP = 'audio';
 const SUBTITLE_GROUP = 'subs';
-const VIDEO_GROUP = 'video';
 const VIDEO_RANGES: Record<number, string> = { 16: 'PQ', 18: 'HLG' };
 
 // HLS wants BCP 47 language tags. Matroska carries ISO 639-2, which has
@@ -180,45 +179,47 @@ export function masterPlaylist(
     codecString(rendition),
   );
   const averageBandwidth = Math.round((index.fileLength * 8) / index.duration);
-  namesMap.clear();
+  const variant = {
+    BANDWIDTH: String(Math.round(averageBandwidth * 1.5)),
+    'AVERAGE-BANDWIDTH': String(averageBandwidth),
+    CODECS: codecs.every(Boolean)
+      ? quoted([...new Set(codecs)].join(','))
+      : undefined,
+    AUDIO: renditions.audio.length > 0 ? quoted(AUDIO_GROUP) : undefined,
+    SUBTITLES:
+      renditions.subtitles.length > 0 ? quoted(SUBTITLE_GROUP) : undefined,
+    'CLOSED-CAPTIONS': 'NONE',
+    RESOLUTION:
+      track.width && track.height
+        ? `${track.width}x${track.height}`
+        : undefined,
+    'FRAME-RATE': track.defaultDurationNs
+      ? (1e9 / track.defaultDurationNs).toFixed(3)
+      : undefined,
+  };
+  // Firefox's MediaCapabilities rejects every av01 codec string paired with
+  // a PQ or HLG transfer function, but runs no such check on HEVC strings.
+  const videoRange =
+    renditions.video.codec === 'hevc'
+      ? VIDEO_RANGES[hevcTransferCharacteristics(track)]
+      : undefined;
 
   lines.push(
-    `#EXT-X-MEDIA:${attributes({
-      TYPE: 'VIDEO',
-      'GROUP-ID': quoted(VIDEO_GROUP),
-      NAME: quoted(uniqueLabel(track, namesMap)),
-      LANGUAGE: optionalQuoted(bcp47(track.language)),
-      CODECS: codecs.every(Boolean)
-        ? quoted([...new Set(codecs)].join(','))
-        : undefined,
-      DEFAULT: 'YES',
-      AUTOSELECT: 'YES',
-      URI: quoted(uri(renditions.video)),
-    })}`,
     `#EXT-X-STREAM-INF:${attributes({
-      BANDWIDTH: String(Math.round(averageBandwidth * 1.5)),
-      'AVERAGE-BANDWIDTH': String(averageBandwidth),
-      AUDIO: renditions.audio.length > 0 ? quoted(AUDIO_GROUP) : undefined,
-      SUBTITLES:
-        renditions.subtitles.length > 0 ? quoted(SUBTITLE_GROUP) : undefined,
-      VIDEO: quoted(VIDEO_GROUP),
-      'CLOSED-CAPTIONS': 'NONE',
-      RESOLUTION:
-        track.width && track.height
-          ? `${track.width}x${track.height}`
-          : undefined,
-      'FRAME-RATE': track.defaultDurationNs
-        ? (1e9 / track.defaultDurationNs).toFixed(3)
-        : undefined,
-      // Firefox's MediaCapabilities rejects every av01 codec string paired with
-      // a PQ or HLG transfer function, but runs no such check on HEVC strings.
-      'VIDEO-RANGE':
-        renditions.video.codec === 'hevc'
-          ? VIDEO_RANGES[hevcTransferCharacteristics(track)]
-          : undefined,
+      ...variant,
+      'VIDEO-RANGE': videoRange,
     })}`,
     uri(renditions.video),
   );
+  if (videoRange) {
+    lines.push(
+      `#EXT-X-STREAM-INF:${attributes({
+        ...variant,
+        'VIDEO-RANGE': 'SDR',
+      })}`,
+      `${uri(renditions.video)}?range=sdr`,
+    );
+  }
 
   return `${lines.join('\n')}\n`;
 }

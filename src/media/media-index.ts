@@ -6,7 +6,7 @@ import type { MkvTrack } from '../matroska/tracks.js';
 
 // Bump when the index shape changes. A cached index of another version is
 // rebuilt from the file rather than read.
-export const MEDIA_INDEX_VERSION = 3;
+export const MEDIA_INDEX_VERSION = 4;
 
 /**
  * ts is a Matroska tick, cluster an absolute file offset, rel the block's
