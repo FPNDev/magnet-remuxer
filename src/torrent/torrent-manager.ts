@@ -292,7 +292,7 @@ export class TorrentManager {
     });
 
     const trackers = magnet
-      ? new Set([...PUBLIC_TRACKERS, ...trackersOf(magnet)]).values().toArray()
+      ? [...new Set([...PUBLIC_TRACKERS, ...trackersOf(magnet)])]
       : PUBLIC_TRACKERS;
 
     const torrent = this.client.add(metadata ?? magnet!, {
