@@ -3,7 +3,7 @@ import { mkdir, rm } from 'node:fs/promises';
 import type { CacheLayout } from '../cache/cache-layout.js';
 import type { SegmentCache } from '../cache/segment-cache.js';
 import { HttpError, RequestAbandonedError } from '../errors.js';
-import { logger } from '../logger.js';
+import { errorMessage, logger } from '../logger.js';
 import {
   buildMediaIndex,
   MEDIA_INDEX_VERSION,
@@ -26,6 +26,11 @@ export const MATROSKA_FILE = /\.(mkv|mk3d|webm)$/iu;
 // capped by count rather than by size.
 const MEMORY_ASSETS = 64;
 
+type IndexBuild = {
+  index: MediaIndex;
+  source?: TorrentFileSource | undefined;
+};
+
 export type AssetRegistryOptions = {
   layout: CacheLayout;
   torrents: TorrentManager;
@@ -35,6 +40,8 @@ export type AssetRegistryOptions = {
   queue: TaskQueue;
   segmentDuration: number;
   readStallMs: number;
+  criticalIndexReads: boolean;
+  subpieceReads: boolean;
   warmSegments: number;
 };
 
@@ -69,7 +76,9 @@ export class AssetRegistry {
     const cached = this.assets.get(key);
     if (cached) {
       this.order.touch(key);
-      return Promise.resolve(cached);
+      return cached.dropped.aborted
+        ? Promise.reject(cached.dropped.reason)
+        : Promise.resolve(cached);
     }
     const indexKey = AssetRegistry.indexKey(infoHash, fileIndex);
     if (priority === Priority.Foreground) {
@@ -82,12 +91,17 @@ export class AssetRegistry {
         if (existing) {
           return existing;
         }
-        const asset = this.build(
+        const { index, source } = await this.indexOf(
           infoHash,
           fileIndex,
-          await this.indexOf(infoHash, fileIndex, priority),
+          priority,
         );
+        const asset = this.build(infoHash, fileIndex, index);
         this.remember(key, asset);
+        source?.onCorrupt((error) => {
+          asset.drop(error);
+          void this.forget(infoHash, fileIndex);
+        });
         return asset;
       }),
     );
@@ -113,6 +127,7 @@ export class AssetRegistry {
       queue,
       readStallMs,
       warmSegments,
+      subpieceReads,
     } = this.options;
 
     return new Asset({
@@ -127,6 +142,7 @@ export class AssetRegistry {
       queue,
       readStallMs,
       warmSegments,
+      subpieceReads,
     });
   }
 
@@ -138,11 +154,28 @@ export class AssetRegistry {
     }
   }
 
+  private async forget(infoHash: string, fileIndex: number): Promise<void> {
+    const mediaDir = this.options.layout.mediaDir(infoHash, fileIndex);
+    try {
+      await rm(mediaDir, { recursive: true, force: true });
+    } catch (err) {
+      logger.warn('Could not delete media built from an unverified piece', {
+        infoHash,
+        fileIndex,
+        error: errorMessage(err),
+      });
+    }
+    this.options.segments.forgetUnder(mediaDir);
+    const key = `${infoHash}/${fileIndex}`;
+    this.assets.delete(key);
+    this.order.delete(key);
+  }
+
   private async indexOf(
     infoHash: string,
     fileIndex: number,
     priority: Priority,
-  ): Promise<MediaIndex> {
+  ): Promise<IndexBuild> {
     const { layout, segmentDuration, segments } = this.options;
     const indexFile = layout.indexFile(infoHash, fileIndex);
 
@@ -153,27 +186,38 @@ export class AssetRegistry {
       saved?.version === MEDIA_INDEX_VERSION &&
       saved.targetDuration === segmentDuration
     ) {
-      return saved;
+      return { index: saved };
     }
 
     const mediaDir = layout.mediaDir(infoHash, fileIndex);
     await rm(mediaDir, { recursive: true, force: true });
     segments.forgetUnder(mediaDir);
 
-    const index = await this.readIndex(infoHash, fileIndex, priority);
+    const { index, source } = await this.readIndex(
+      infoHash,
+      fileIndex,
+      priority,
+    );
     await mkdir(mediaDir, { recursive: true });
     await writeFileAtomic(indexFile, JSON.stringify(index));
 
-    return index;
+    return { index, source };
   }
 
   private readIndex(
     infoHash: string,
     fileIndex: number,
     priority: Priority,
-  ): Promise<MediaIndex> {
-    const { queue, torrents, pieces, segmentDuration, readStallMs } =
-      this.options;
+  ): Promise<IndexBuild> {
+    const {
+      queue,
+      torrents,
+      pieces,
+      segmentDuration,
+      readStallMs,
+      criticalIndexReads,
+      subpieceReads,
+    } = this.options;
 
     return queue.run(
       {
@@ -194,13 +238,18 @@ export class AssetRegistry {
           const source = new TorrentFileSource(torrent, file, pieces, {
             stallMs: readStallMs,
             priority: ReadPriority.Index,
+            critical: criticalIndexReads,
+            subpieceReads,
+            unverified: torrents.unverified,
             signal,
           });
-          const index = await buildMediaIndex(
-            source,
-            file.name,
-            segmentDuration,
-          );
+          let index: MediaIndex;
+          try {
+            index = await buildMediaIndex(source, file.name, segmentDuration);
+          } catch (err) {
+            source.release();
+            throw err;
+          }
 
           logger.info('Indexed media file', {
             infoHash,
@@ -211,7 +260,7 @@ export class AssetRegistry {
             ms: Date.now() - started,
           });
 
-          return index;
+          return { index, source };
         }),
     );
   }

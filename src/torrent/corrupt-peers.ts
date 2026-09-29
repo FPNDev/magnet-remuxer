@@ -17,7 +17,7 @@ const STRIKE_TTL_MS = 30 * 60_000;
 const TRACKED_PIECES = 512;
 
 // webtorrent reports a hash failure only as a warning string.
-const FAILED_PIECE = /Piece (\d+) failed verification/u;
+export const FAILED_PIECE = /Piece (\d+) failed verification/u;
 
 export type CorruptPeersOptions = {
   enabled: boolean;

@@ -1,3 +1,4 @@
+import { RequestAbandonedError } from '../errors.js';
 import { logger } from '../logger.js';
 
 export const Priority = { Foreground: 0, Background: 1 } as const;
@@ -7,13 +8,10 @@ export type Priority = (typeof Priority)[keyof typeof Priority];
 // task eventually beats a fresher one that scores better.
 const SCORE_AGING_MS = 5000;
 
-export class CancelledError extends Error {
-  override name = 'CancelledError';
-}
-
 export type TaskContext = {
   signal: AbortSignal;
   waitedMs: number;
+  promoted: Promise<void>;
 };
 
 /**
@@ -39,6 +37,7 @@ type RunningTask = {
   priority: Priority;
   stopIfNotPromoted: boolean;
   abort: AbortController;
+  promotion: PromiseWithResolvers<void>;
 };
 
 export class TaskQueue {
@@ -84,14 +83,26 @@ export class TaskQueue {
             priority: entry.priority,
             stopIfNotPromoted: entry.stopIfNotPromoted ?? false,
             abort: new AbortController(),
+            promotion: Promise.withResolvers<void>(),
           };
+          if (running.priority === Priority.Foreground) {
+            running.promotion.resolve();
+          }
           this.running.add(running);
+          running.abort.signal.addEventListener(
+            'abort',
+            () => {
+              reject(running.abort.signal.reason);
+            },
+            { once: true },
+          );
 
           Promise.resolve()
             .then(() =>
               task({
                 signal: running.abort.signal,
                 waitedMs: Date.now() - entry.queuedAt,
+                promoted: running.promotion.promise,
               }),
             )
             .then(resolve, reject)
@@ -149,6 +160,7 @@ export class TaskQueue {
     for (const task of this.running) {
       if (task.key === key) {
         task.priority = Priority.Foreground;
+        task.promotion.resolve();
       }
     }
     this.stopAbandonTimer(key);
@@ -160,30 +172,32 @@ export class TaskQueue {
    * this to background tasks queued with stopIfNotPromoted, leaving foreground
    * work and other background jobs untouched.
    */
-  abandon(key: string, keepWarmOnly = false): void {
+  abandon(key: string, keepWarmOnly = false, reason?: Error): void {
     if (
-      this.abandonWaiting(key, keepWarmOnly) +
-      this.abandonRunning(key, keepWarmOnly)
+      this.abandonWaiting(key, keepWarmOnly, reason) +
+      this.abandonRunning(key, keepWarmOnly, reason)
     ) {
       this.stopAbandonTimer(key);
       this.drain();
     }
   }
 
-  private abandonWaiting(key: string, keepWarmOnly = false) {
+  private abandonWaiting(key: string, keepWarmOnly = false, reason?: Error) {
     let abandonedTasks = 0;
     for (let i = this.waiting.length - 1; i >= 0; i--) {
       const entry = this.waiting[i]!;
       if (shouldAbandon(entry, key, keepWarmOnly)) {
         ++abandonedTasks;
         this.waiting.splice(i, 1);
-        entry.cancel(new CancelledError(`Abandoned ${entry.key}`));
+        entry.cancel(
+          reason ?? new RequestAbandonedError(`Nobody is waiting for ${key}`),
+        );
       }
     }
     return abandonedTasks;
   }
 
-  private abandonRunning(key: string, keepWarmOnly = false) {
+  private abandonRunning(key: string, keepWarmOnly = false, reason?: Error) {
     let abandonedTasks = 0;
     for (const task of this.running) {
       if (
@@ -191,7 +205,9 @@ export class TaskQueue {
         !task.abort.signal.aborted
       ) {
         ++abandonedTasks;
-        task.abort.abort(new CancelledError(`Abandoned ${task.key}`));
+        task.abort.abort(
+          reason ?? new RequestAbandonedError(`Nobody is waiting for ${key}`),
+        );
       }
     }
 
@@ -235,7 +251,9 @@ export class TaskQueue {
 
       const victim = this.pickVictim();
       if (victim) {
-        victim.abort.abort(new CancelledError(`Preempted ${victim.key}`));
+        victim.abort.abort(
+          new RequestAbandonedError(`Nobody is waiting for ${victim.key}`),
+        );
       }
     }
   }

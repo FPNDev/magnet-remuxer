@@ -64,6 +64,10 @@ export class SingleFlight {
     };
   }
 
+  keys(): MapIterator<string> {
+    return this.pending.keys();
+  }
+
   private drop(key: string, flight: PendingFlight, aborted = false) {
     if (this.pending.get(key) !== flight) {
       return;

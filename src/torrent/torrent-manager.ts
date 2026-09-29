@@ -15,6 +15,7 @@ import { PeerMemory } from './peer-memory.js';
 import type { AdoptableTorrent, PieceCache } from './piece-store.js';
 import { asSwarmTorrent, type SwarmWire } from './swarm-internals.js';
 import { TailHedge, type TailHedgeOptions } from './tail-hedge.js';
+import { UnverifiedPieces } from './unverified-pieces.js';
 import { PUBLIC_TRACKERS } from './public-trackers.js';
 
 export type TorrentFileInfo = {
@@ -61,6 +62,7 @@ export class TorrentManager {
   private readonly hedge: TailHedge;
   private readonly churn: PeerChurn;
   private readonly corrupt: CorruptPeers;
+  readonly unverified: UnverifiedPieces;
   private readonly bans: PeerBans;
   private readonly peers: PeerMemory;
 
@@ -71,6 +73,7 @@ export class TorrentManager {
     this.hedge = new TailHedge(options.hedge);
     this.churn = new PeerChurn(this.bans, options.churn);
     this.corrupt = new CorruptPeers(this.bans, options.corrupt);
+    this.unverified = new UnverifiedPieces();
     this.client.on('error', (err) => {
       logger.error('WebTorrent client error', { error: errorMessage(err) });
     });
@@ -341,6 +344,7 @@ export class TorrentManager {
     });
     this.bans.attach(asSwarmTorrent(torrent), infoHash, banned);
     this.corrupt.attach(torrent, infoHash);
+    this.unverified.attach(torrent, infoHash);
     const peers = [
       ...new Set([
         ...(metadata && magnet ? peersOf(magnet) : []),
@@ -442,6 +446,7 @@ export class TorrentManager {
     this.hedge.detach(infoHash);
     this.churn.detach(infoHash);
     this.corrupt.detach(infoHash);
+    this.unverified.detach(infoHash);
     await this.bans.detach(infoHash);
     this.peers.forget(infoHash);
     torrent.pause();

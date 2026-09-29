@@ -50,7 +50,12 @@ export type SwarmWire = {
 };
 
 export type SwarmPiece = TorrentPiece & {
+  _chunks: number;
+  _reservations: number;
+  _cancellations: number[] | null;
   get(index: number): Uint8Array | null;
+  init(): boolean;
+  reserve(): number;
 };
 
 export type Selection = {
@@ -66,6 +71,14 @@ export type SwarmPeer = {
   wire: SwarmWire | null;
 };
 
+type SwarmStore = {
+  get(
+    index: number,
+    options: { offset: number; length: number },
+    callback: (err: Error | null, chunk?: Uint8Array) => void,
+  ): void;
+};
+
 export type SwarmTorrent = Torrent & {
   destroyed: boolean;
   bitfield: { get(index: number): boolean };
@@ -75,7 +88,16 @@ export type SwarmTorrent = Torrent & {
   _numQueued: number;
   _numConns: number;
   client: { maxConns: number };
+  store: SwarmStore;
   _addPeer(peer: unknown, type?: string, source?: string): unknown;
+  _select(
+    from: number,
+    to: number,
+    priority: number,
+    notify: null,
+    isStreamSelection: boolean,
+  ): void;
+  _deselect(from: number, to: number, isStreamSelection: boolean): void;
 };
 
 export const asSwarmTorrent = (torrent: Torrent): SwarmTorrent =>

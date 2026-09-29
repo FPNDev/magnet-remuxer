@@ -1,4 +1,4 @@
-import { mkdir } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { CacheLayout } from '../cache/cache-layout.js';
@@ -17,11 +17,7 @@ import { ReadPriority, TorrentFileSource } from '../torrent/torrent-source.js';
 import { untilAborted } from '../util/async.js';
 import { exists, writeFileAtomic } from '../util/fs.js';
 import { SingleFlight, type FlightResponse } from '../util/single-flight.js';
-import {
-  CancelledError,
-  Priority,
-  type TaskQueue,
-} from '../util/task-queue.js';
+import { Priority, type TaskQueue } from '../util/task-queue.js';
 import {
   masterPlaylist,
   mediaPlaylist,
@@ -45,6 +41,7 @@ export type AssetOptions = {
   remuxer: Remuxer;
   queue: TaskQueue;
   readStallMs: number;
+  subpieceReads: boolean;
   warmSegments: number;
 };
 
@@ -56,6 +53,7 @@ export class Asset {
   readonly index: MediaIndex;
   readonly renditions: RenditionSet;
   private readonly flights = new SingleFlight();
+  private readonly stopped = new AbortController();
 
   constructor(private readonly options: AssetOptions) {
     this.index = options.index;
@@ -72,6 +70,17 @@ export class Asset {
 
   get segmentCount(): number {
     return segmentCount(this.index);
+  }
+
+  get dropped(): AbortSignal {
+    return this.stopped.signal;
+  }
+
+  drop(reason: Error): void {
+    this.stopped.abort(reason);
+    for (const key of this.flights.keys()) {
+      this.options.queue.abandon(key, false, reason);
+    }
   }
 
   dirOf(rendition: Rendition): string {
@@ -108,6 +117,7 @@ export class Asset {
     const { layout, infoHash, fileIndex } = this.options;
     return this.flights.run('playlists', undefined, async () => {
       for (const rendition of this.all()) {
+        this.stopped.signal.throwIfAborted();
         const dir = this.dirOf(rendition);
         await mkdir(dir, { recursive: true });
         await writeFileAtomic(
@@ -115,6 +125,7 @@ export class Asset {
           mediaPlaylist(this.index, rendition),
         );
       }
+      this.stopped.signal.throwIfAborted();
       await writeFileAtomic(
         layout.masterFile(infoHash, fileIndex),
         masterPlaylist(this.index, this.renditions, `${infoHash}/${fileIndex}`),
@@ -149,8 +160,10 @@ export class Asset {
             key: file,
             priority,
           },
-          ({ signal: running }) =>
-            remuxer.writeInit(this.index, rendition, file, running),
+          ({ signal: running }) => {
+            this.stopped.signal.throwIfAborted();
+            return remuxer.writeInit(this.index, rendition, file, running);
+          },
         );
       }),
     );
@@ -183,8 +196,9 @@ export class Asset {
         this.flights.run(file, signal, () =>
           queue.run(
             { key: file, priority, stopIfNotPromoted },
-            ({ signal: running, waitedMs }) =>
+            ({ signal: running, waitedMs, promoted }) =>
               torrents.use(this.infoHash, async (torrent) => {
+                this.stopped.signal.throwIfAborted();
                 const torrentFile = torrent.files[this.fileIndex];
                 if (!torrentFile) {
                   throw new HttpError(
@@ -208,17 +222,33 @@ export class Asset {
                   pieces,
                   {
                     stallMs: this.options.readStallMs,
+                    subpieceReads: this.options.subpieceReads,
+                    unverified: torrents.unverified,
                     ...(isForeground ? { priority: ReadPriority.Playing } : {}),
                   },
                 );
+                void promoted.then(() => {
+                  source.promote();
+                });
+                source.onCorrupt((error) => {
+                  queue.abandon(file, false, error);
+                });
 
                 await mkdir(path.dirname(file), { recursive: true });
-                await remuxer.writeSegment(
-                  { index: this.index, source, rendition, signal: running },
-                  n,
-                  file,
-                );
+                try {
+                  await remuxer.writeSegment(
+                    { index: this.index, source, rendition, signal: running },
+                    n,
+                    file,
+                  );
+                } catch (err) {
+                  source.release();
+                  throw err;
+                }
                 await segments.added(file);
+                source.onCorrupt(() => {
+                  void rm(file, { force: true }).catch(() => {});
+                });
                 logger.debug('Rendered segment', {
                   infoHash: this.infoHash,
                   rendition: renditionPath(rendition),
@@ -235,10 +265,7 @@ export class Asset {
     try {
       await render();
     } catch (err) {
-      if (
-        err instanceof CancelledError ||
-        err instanceof RequestAbandonedError
-      ) {
+      if (err instanceof RequestAbandonedError) {
         for (
           let i = n + 1;
           i < Math.min(n + 1 + this.options.warmSegments, this.segmentCount);

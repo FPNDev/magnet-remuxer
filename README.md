@@ -89,14 +89,17 @@ node dist/index.js  # when the build is current
 | `REQUEST_TIMEOUT_S`   | `120`                | A request waiting longer than this fails with 504.                                                                  |
 | `MAX_CONCURRENT_JOBS` | `64`      | ffmpeg jobs across all torrents.                                                                                    |
 | `JOB_TIMEOUT_S`       | `180`                | Hard limit for one segment job.                                                                                     |
+| `AUDIO_READ_FROM_KEYFRAME` | `1`                  | Start transcoded audio reads at the segment's own keyframe, not the one before.                                     |
 | `READ_STALL_S`        | `45`                 | Fail a read when the torrent receives nothing for this long.                                                        |
-| `MAX_PEERS`           | `100`                | Connections held per torrent.                                                                                       |
+| `MAX_PEERS`           | `200`                | Connections held per torrent.                                                                                       |
 | `TAIL_HEDGE`          | `1`                  | Ask a second peer for the block a read is stopped at.                                                               |
 | `TAIL_HEDGE_MS`       | `250`                | How long that block waits before the second peer is asked.                                                          |
 | `PEER_CHURN`          | `1`                  | Drop peers that hold nothing being read, or answer nothing.                                                         |
 | `PEER_CHURN_GRACE_S`  | `10`                 | How long a new connection has to prove itself.                                                                      |
 | `BAN_CORRUPT_PEERS`   | `1`                  | Ban peers whose data fails verification.                                                                            |
 | `PEER_BAN_DAYS`       | `7`                  | How long such a ban lasts. Bans survive a restart.                                                                  |
+| `CRITICAL_INDEX_READS` | `1`                  | Let every unchoked peer serve the pieces an index read needs.                                                       |
+| `SUBPIECE_READS`      | `1`                  | Serve blocks before their piece passes the hash check. `0` reads whole verified pieces.                             |
 | `METADATA_TIMEOUT_S`  | `90`                 | How long to wait for torrent metadata.                                                                              |
 | `TORRENT_IDLE_S`      | `600`                | Remove torrents unused for this long.                                                                               |
 

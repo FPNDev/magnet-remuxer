@@ -6,9 +6,14 @@ import { HttpError } from '../errors.js';
 import type { ByteSource } from '../io/byte-source.js';
 import { logger } from '../logger.js';
 import type { PieceCache } from './piece-store.js';
+import { subpieceStream } from './subpiece-stream.js';
+import { asSwarmTorrent, BLOCK_LENGTH } from './swarm-internals.js';
+import type { UnverifiedPieces } from './unverified-pieces.js';
 
 const asError = (reason: unknown): Error | undefined =>
   reason instanceof Error ? reason : undefined;
+
+const PREFETCH_HOLD_MS = 60_000;
 
 // webtorrent selection priorities. Indexing outranks playback because it
 // is short and nothing can be served until it finishes.
@@ -20,7 +25,10 @@ export type ReadPriority = (typeof ReadPriority)[keyof typeof ReadPriority];
 
 export type TorrentReadOptions = {
   stallMs: number;
+  subpieceReads: boolean;
+  unverified: UnverifiedPieces;
   priority?: ReadPriority | undefined;
+  critical?: boolean | undefined;
   signal?: AbortSignal | undefined;
 };
 
@@ -30,6 +38,31 @@ export type TorrentReadOptions = {
  */
 export class TorrentFileSource implements ByteSource {
   readonly length: number;
+  readonly minReadBytes?: number;
+  private priority: ReadPriority | undefined;
+  private readonly raises = new Set<() => void>();
+  private readonly tracked = new Set<number>();
+  private readonly live = new Set<StallWatchdog>();
+  private corruption: HttpError | undefined;
+  private invalidate: ((error: HttpError) => void) | undefined;
+  private readonly onBadPiece = (piece: number): void => {
+    if (this.corruption) {
+      return;
+    }
+    const error = new HttpError(
+      502,
+      `Piece ${piece} of the torrent could not be verified`,
+    );
+    this.corruption = error;
+    logger.warn('Dropping work built from an unverified piece', {
+      infoHash: this.torrent.infoHash,
+      piece,
+    });
+    for (const watchdog of this.live) {
+      watchdog.destroy(error);
+    }
+    this.invalidate?.(error);
+  };
 
   constructor(
     private readonly torrent: Torrent,
@@ -38,6 +71,20 @@ export class TorrentFileSource implements ByteSource {
     private readonly options: TorrentReadOptions,
   ) {
     this.length = file.length;
+    this.priority = options.priority;
+    if (options.subpieceReads) {
+      this.minReadBytes = BLOCK_LENGTH;
+    }
+  }
+
+  promote(): void {
+    if (this.priority !== undefined) {
+      return;
+    }
+    this.priority = ReadPriority.Playing;
+    for (const raise of this.raises) {
+      raise();
+    }
   }
 
   stream(start: number, end: number): Readable {
@@ -52,9 +99,20 @@ export class TorrentFileSource implements ByteSource {
     // Pinned pieces stay out of cache eviction until the stream closes.
     const unpin = this.pieces.pin(infoHash, first, last);
 
+    const closed = new AbortController();
     let source: Readable;
     try {
-      source = this.file.createReadStream({ start, end: end - 1 });
+      source = this.options.subpieceReads
+        ? subpieceStream(
+            asSwarmTorrent(this.torrent),
+            this.file.offset + start,
+            this.file.offset + end,
+            closed.signal,
+            (piece) => {
+              this.watch(piece);
+            },
+          )
+        : this.file.createReadStream({ start, end: end - 1 });
     } catch (err) {
       unpin();
       throw err;
@@ -68,24 +126,46 @@ export class TorrentFileSource implements ByteSource {
       },
       onStall: () => this.stalled(start, end),
     });
-    watchdog.once('close', unpin);
 
-    const { priority, signal } = this.options;
-    if (priority !== undefined) {
+    const { signal } = this.options;
+    if (this.options.subpieceReads) {
+      this.select(first, last, 1);
+      this.live.add(watchdog);
+    }
+
+    let raised = false;
+    const raise = () => {
+      const { priority } = this;
+      if (raised || priority === undefined) {
+        return;
+      }
+      raised = true;
       this.select(first, last, priority);
-      // Without the deselect the torrent keeps downloading ahead for a reader
-      // that has gone.
-      watchdog.once('close', () => {
+      if (this.options.critical) {
+        try {
+          this.torrent.critical(first, last);
+        } catch {}
+      }
+    };
+    raise();
+    this.raises.add(raise);
+    const stop = () => watchdog.destroy(asError(signal?.reason));
+    signal?.addEventListener('abort', stop, { once: true });
+    // Without the deselect the torrent keeps downloading ahead for a reader
+    // that has gone.
+    watchdog.once('close', () => {
+      unpin();
+      if (this.options.subpieceReads) {
         this.select(first, last);
-      });
-    }
-    if (signal) {
-      const stop = () => watchdog.destroy(asError(signal.reason));
-      signal.addEventListener('abort', stop, { once: true });
-      watchdog.once('close', () => {
-        signal.removeEventListener('abort', stop);
-      });
-    }
+        this.live.delete(watchdog);
+        closed.abort();
+      }
+      this.raises.delete(raise);
+      if (raised) {
+        this.select(first, last);
+      }
+      signal?.removeEventListener('abort', stop);
+    });
 
     // The watchdog emits the failure to its own reader. This catch only keeps
     // the rejection from going unhandled.
@@ -93,14 +173,57 @@ export class TorrentFileSource implements ByteSource {
     return watchdog;
   }
 
+  prefetch(start: number, end: number): void {
+    if (!this.options.subpieceReads) {
+      return;
+    }
+    const { pieceLength } = this.torrent;
+    const first = Math.floor((this.file.offset + start) / pieceLength);
+    const last = Math.floor(
+      (this.file.offset + Math.min(end, this.length) - 1) / pieceLength,
+    );
+    this.select(first, last, ReadPriority.Playing);
+    setTimeout(() => {
+      this.select(first, last);
+    }, PREFETCH_HOLD_MS).unref();
+  }
+
+  onCorrupt(invalidate: (error: HttpError) => void): void {
+    if (this.corruption) {
+      invalidate(this.corruption);
+    } else {
+      this.invalidate = invalidate;
+    }
+  }
+
+  release(): void {
+    for (const piece of this.tracked) {
+      this.options.unverified.remove(
+        this.torrent.infoHash,
+        piece,
+        this.onBadPiece,
+      );
+    }
+    this.tracked.clear();
+  }
+
+  private watch(piece: number): void {
+    if (this.tracked.has(piece)) {
+      return;
+    }
+    this.tracked.add(piece);
+    this.options.unverified.add(this.torrent.infoHash, piece, this.onBadPiece);
+  }
+
   // webtorrent throws when the torrent is gone or the range is out of
   // bounds. Neither is a reason to fail the read.
   private select(first: number, last: number, priority?: number): void {
+    const swarm = asSwarmTorrent(this.torrent);
     try {
       if (priority === undefined) {
-        this.torrent.deselect(first, last);
+        swarm._deselect(first, last, true);
       } else {
-        this.torrent.select(first, last, priority);
+        swarm._select(first, last, priority, null, true);
       }
     } catch {}
   }

@@ -15,6 +15,10 @@ import { MatroskaError } from '../matroska/ebml.js';
 // A torrent's file list is fixed by its info hash, so it caches for a day.
 const FILE_LIST_CACHE = 'public, max-age=86400';
 
+type Locals = {
+  lifetime?: AbortSignal;
+};
+
 export type AppDependencies = {
   hls: HlsService;
   status: () => unknown;
@@ -108,13 +112,14 @@ function magnetFromQuery(req: Request): string {
  * Signal that aborts with RequestAbandonedError once the client drops the
  * response. Reads, queue slots and ffmpeg processes downstream all take it.
  */
-function lifetime(res: Response): AbortSignal {
+function lifetime(res: Response<unknown, Locals>): AbortSignal {
   const controller = new AbortController();
   res.once('close', () => {
     if (!res.writableFinished) {
       controller.abort(new RequestAbandonedError('Request ended'));
     }
   });
+  res.locals.lifetime = controller.signal;
   return controller.signal;
 }
 
@@ -129,7 +134,17 @@ function sendFile(res: Response, file: ServedFile): Promise<void> {
       { dotfiles: 'allow', cacheControl: false },
       (err) => {
         if (err && !res.headersSent) {
-          reject(err);
+          if ('code' in err && err.code === 'ECONNABORTED') {
+            reject(new RequestAbandonedError('Request aborted'));
+          } else if (
+            'code' in err &&
+            err.code === 'ENOENT' &&
+            file.dropped?.aborted
+          ) {
+            reject(file.dropped.reason);
+          } else {
+            reject(err);
+          }
         } else {
           resolve();
         }
@@ -151,9 +166,15 @@ const requestLogger: RequestHandler = (req, res, next) => {
   next();
 };
 
-const errorHandler: ErrorRequestHandler = (err: unknown, req, res, _next) => {
+const errorHandler: ErrorRequestHandler<
+  Request['params'],
+  unknown,
+  unknown,
+  Request['query'],
+  Locals
+> = (err: unknown, req, res, _next) => {
   // Nobody is left to read a response, and a client leaving is not a fault.
-  if (err instanceof RequestAbandonedError) {
+  if (err instanceof RequestAbandonedError && res.locals.lifetime?.aborted) {
     logger.debug('Request abandoned', { path: req.path });
     return;
   }

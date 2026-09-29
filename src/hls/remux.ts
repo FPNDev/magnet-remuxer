@@ -87,6 +87,7 @@ export type InterleavingNotes = {
 export type RemuxerOptions = {
   ffmpegPath: string;
   timeoutMs: number;
+  audioReadFromKeyframe: boolean;
   notes?: InterleavingNotes | undefined;
 };
 
@@ -149,6 +150,7 @@ export class Remuxer {
     if (!hasTopLevelBox(init, 'moov')) {
       throw new Error('ffmpeg produced no moov box');
     }
+    signal?.throwIfAborted();
     await writeFileAtomic(outPath, init);
   }
 
@@ -175,7 +177,12 @@ export class Remuxer {
     n: number,
     outPath: string,
   ): Promise<void> {
-    const planned = plan(target.index, target.rendition, n);
+    const planned = plan(
+      target.index,
+      target.rendition,
+      n,
+      this.options.audioReadFromKeyframe,
+    );
     const { args } = planned;
     const file = `${target.index.fileName}:${target.index.fileLength}`;
     const slices = this.looselyInterleaved.has(file)
@@ -203,6 +210,7 @@ export class Remuxer {
           }
           throw boundaryError(n);
         }
+        target.signal?.throwIfAborted();
         await writeFileAtomic(outPath, toHlsWebVtt(Buffer.concat(chunks)));
         return;
       }
@@ -220,6 +228,7 @@ export class Remuxer {
           }
           throw boundaryError(n);
         }
+        target.signal?.throwIfAborted();
         await rename(temp, outPath);
         return;
       } finally {
@@ -258,7 +267,12 @@ export class Remuxer {
   }
 }
 
-function plan(index: MediaIndex, rendition: Rendition, n: number): Plan {
+function plan(
+  index: MediaIndex,
+  rendition: Rendition,
+  n: number,
+  fromKeyframe: boolean,
+): Plan {
   const keyframeSlices = [
     keyframeSlice(index, n, true),
     keyframeSlice(index, n, false),
@@ -269,7 +283,7 @@ function plan(index: MediaIndex, rendition: Rendition, n: number): Plan {
       return { slices: keyframeSlices, args: copyArgs(rendition) };
     case 'audio':
       return rendition.transcode
-        ? aacPlan(index, rendition, n)
+        ? aacPlan(index, rendition, n, fromKeyframe)
         : { slices: keyframeSlices, args: copyArgs(rendition) };
     case 'subtitle':
       return {
@@ -348,6 +362,7 @@ function aacPlan(
   index: MediaIndex,
   rendition: AudioRendition,
   n: number,
+  fromKeyframe: boolean,
 ): Plan {
   const { rate, args: outputArgs } = aacOutput(rendition);
   const toGrid = (seconds: number) =>
@@ -367,7 +382,9 @@ function aacPlan(
     encodeTo === null ? null : toTicks(encodeTo, AUDIO_READ_MARGIN_SECONDS);
 
   const filters: string[] = [];
-  if (rendition.track.sampleRate !== rate) {
+  if (fromKeyframe) {
+    filters.push(`aresample=${rate}:async=1:first_pts=${encodeFrom}`);
+  } else if (rendition.track.sampleRate !== rate) {
     filters.push(`aresample=${rate}`);
   }
   filters.push(
@@ -380,9 +397,11 @@ function aacPlan(
   const drop =
     `lt(pts\\,${start})` + (end === null ? '' : `+gte(pts\\,${end})`);
 
+  const tight = timeSlice(index, from, to, { tight: true });
   return {
     slices: [
-      timeSlice(index, from, to, { tight: true }),
+      ...(fromKeyframe ? [keyframeAudioSlice(index, n, to, tight)] : []),
+      tight,
       timeSlice(index, from, to),
     ],
     args: [
@@ -394,6 +413,42 @@ function aacPlan(
       `noise=drop=${drop}`,
       ...FMP4_OUTPUT_ARGS,
     ],
+  };
+}
+
+function keyframeAudioSlice(
+  index: MediaIndex,
+  n: number,
+  to: number | null,
+  tight: SliceTarget,
+): SliceTarget {
+  const k = index.segmentStarts[n];
+  const keyframe = n === 0 || k === undefined ? undefined : index.keyframes[k];
+  let readEnd = tight.readEnd;
+  if (to !== null) {
+    for (const [i, next] of index.keyframes.entries()) {
+      if (next.ts <= to) {
+        continue;
+      }
+      const prev = index.keyframes[i - 1];
+      if (prev && next.ts > prev.ts) {
+        const share = (to - prev.ts) / (next.ts - prev.ts);
+        readEnd = Math.min(
+          readEnd,
+          prev.cluster +
+            Math.ceil(
+              (next.cluster - prev.cluster) * Math.min(1, share * 1.5 + 0.4),
+            ),
+        );
+      }
+      break;
+    }
+  }
+  return {
+    ...tight,
+    readStart: keyframe ? keyframe.cluster : index.firstClusterOffset,
+    readEnd,
+    verifyStart: false,
   };
 }
 

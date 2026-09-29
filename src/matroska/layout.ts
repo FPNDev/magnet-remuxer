@@ -35,6 +35,8 @@ type RawElement = {
 // this much and later elements come out of the same block.
 const READ_AHEAD = 256 * 1024;
 
+const EARLY_MEDIA_BYTES = 16 * 1024 * 1024;
+
 class CachedReader {
   private readonly blocks: { start: number; data: Buffer }[] = [];
 
@@ -50,7 +52,7 @@ class CachedReader {
 
     const fetchEnd = Math.min(
       this.source.length,
-      Math.max(end, start + READ_AHEAD),
+      Math.max(end, start + (this.source.minReadBytes ?? READ_AHEAD)),
     );
     const data = await readRange(this.source, start, fetchEnd);
     if (data.length < end - start) {
@@ -200,6 +202,7 @@ export async function readMatroskaLayout(
   if (firstCluster === undefined) {
     throw new MatroskaError('File has no clusters');
   }
+  source.prefetch?.(firstCluster, firstCluster + EARLY_MEDIA_BYTES);
 
   // A SeekHead can point at another SeekHead, usually one stored at the end of
   // the file next to the Cues. loadSeekHead ignores repeats, so cycles end.

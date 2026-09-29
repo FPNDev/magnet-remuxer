@@ -64,6 +64,7 @@ async function main(): Promise<void> {
   const remuxer = new Remuxer({
     ffmpegPath: config.ffmpegPath,
     timeoutMs: config.jobTimeoutMs,
+    audioReadFromKeyframe: config.audioReadFromKeyframe,
     notes: new InterleavingNotes(layout),
   });
   await remuxer.restoreNotes();
@@ -81,6 +82,8 @@ async function main(): Promise<void> {
     warmConcurrency: config.warmConcurrency,
     requestTimeoutMs: config.requestTimeoutMs,
     readStallMs: config.readStallMs,
+    criticalIndexReads: config.criticalIndexReads,
+    subpieceReads: config.subpieceReads,
   });
 
   const budgets =

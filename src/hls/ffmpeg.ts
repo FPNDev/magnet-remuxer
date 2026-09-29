@@ -67,7 +67,7 @@ export class FfmpegSupervisor {
     });
 
     let failure: unknown;
-    let exited = false;
+    let outputError: unknown;
     // The first reason recorded wins: the kill it triggers makes the child
     // exit non-zero, and that exit must not replace the real cause.
     const kill = (reason: unknown) => {
@@ -78,12 +78,10 @@ export class FfmpegSupervisor {
     const closed = new Promise<number | null>((resolve) => {
       child.once('error', (err) => {
         failure ??= err;
-        exited = true;
         this.running.delete(child);
         resolve(null);
       });
       child.once('close', (code) => {
-        exited = true;
         this.running.delete(child);
         resolve(code);
       });
@@ -114,7 +112,13 @@ export class FfmpegSupervisor {
     const outputs = run.output ? [run.output].flat() : [];
     const writing =
       outputs.length > 0
-        ? pipeline(child.stdout!, ...(outputs as [Writable, ...Writable[]]))
+        ? pipeline(
+            child.stdout!,
+            ...(outputs as [Writable, ...Writable[]]),
+          ).catch((err: unknown) => {
+            outputError = err;
+            child.kill('SIGKILL');
+          })
         : Promise.resolve();
 
     try {
@@ -122,17 +126,15 @@ export class FfmpegSupervisor {
       if (failure) {
         throw failure;
       }
+      if (outputError) {
+        throw outputError;
+      }
       if (code !== 0 && code !== null) {
         throw new FfmpegError(`ffmpeg exited with code ${code}`, stderr);
       }
     } finally {
       clearTimeout(timer);
       run.signal?.removeEventListener('abort', onAbort);
-      // Promise.all rejects as soon as the output pipeline fails, which can be
-      // before the child has exited.
-      if (!exited) {
-        child.kill('SIGKILL');
-      }
     }
   }
 }

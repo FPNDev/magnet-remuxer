@@ -11,11 +11,7 @@ import type { TorrentManager } from '../torrent/torrent-manager.js';
 import { untilAborted, withTimeout } from '../util/async.js';
 import { exists } from '../util/fs.js';
 import { SingleFlight, type FlightResponse } from '../util/single-flight.js';
-import {
-  CancelledError,
-  Priority,
-  type TaskQueue,
-} from '../util/task-queue.js';
+import { Priority, type TaskQueue } from '../util/task-queue.js';
 import type { Asset } from './asset.js';
 import { AssetRegistry, MATROSKA_FILE } from './asset-registry.js';
 import { renditionPath, segmentFileName } from './playlists.js';
@@ -36,12 +32,15 @@ export type HlsServiceOptions = {
   warmConcurrency: number;
   requestTimeoutMs: number;
   readStallMs: number;
+  criticalIndexReads: boolean;
+  subpieceReads: boolean;
 };
 
 export type ServedFile = {
   path: string;
   contentType: string;
   cacheControl: string;
+  dropped?: AbortSignal | undefined;
 };
 
 const SEGMENT_NAME = /^(\d+)\.(m4s|vtt)$/u;
@@ -70,6 +69,8 @@ export class HlsService {
       queue: options.queue,
       segmentDuration: options.segmentDuration,
       readStallMs: options.readStallMs,
+      criticalIndexReads: options.criticalIndexReads,
+      subpieceReads: options.subpieceReads,
       warmSegments: options.warmSegments,
     });
     this.warming = new WarmQueue({
@@ -196,6 +197,7 @@ export class HlsService {
         path: file,
         contentType: PLAYLIST_TYPE,
         cacheControl: PLAYLIST_CACHE,
+        dropped: asset.dropped,
       };
     }
 
@@ -204,7 +206,12 @@ export class HlsService {
         asset.ensureInit(rendition, file, Priority.Foreground, signal),
         `the init section of ${renditionPath(rendition)}`,
       );
-      return { path: file, contentType: mediaType, cacheControl: MEDIA_CACHE };
+      return {
+        path: file,
+        contentType: mediaType,
+        cacheControl: MEDIA_CACHE,
+        dropped: asset.dropped,
+      };
     }
 
     const segment = SEGMENT_NAME.exec(name);
@@ -241,10 +248,7 @@ export class HlsService {
           asset
             .ensureSegment(rendition, i, Priority.Background, signal, true)
             .catch((err) => {
-              if (
-                !(err instanceof CancelledError) &&
-                !(err instanceof RequestAbandonedError)
-              ) {
+              if (!(err instanceof RequestAbandonedError)) {
                 logger.warn('Keep-warm render failed', {
                   rendition: renditionPath(rendition),
                   n: i,
@@ -263,6 +267,7 @@ export class HlsService {
       contentType:
         rendition.type === 'subtitle' ? 'text/vtt; charset=utf-8' : mediaType,
       cacheControl: MEDIA_CACHE,
+      dropped: asset.dropped,
     };
   }
 

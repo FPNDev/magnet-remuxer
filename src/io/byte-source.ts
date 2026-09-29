@@ -4,8 +4,10 @@ import { Readable } from 'node:stream';
 /** Random-access reader over a fixed-length byte range. */
 export type ByteSource = {
   readonly length: number;
+  readonly minReadBytes?: number;
   /** end is exclusive. */
   stream(start: number, end: number): Readable;
+  prefetch?(start: number, end: number): void;
 };
 
 // Views the chunk's memory rather than copying it, so the result is only safe
