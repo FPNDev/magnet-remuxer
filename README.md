@@ -1,5 +1,7 @@
 # magnet-remuxer
 
+## WIP - requires heavy refactoring. Has known bugs with audio splitting for some assets.
+
 An HTTP server that plays a torrent over HLS. `GET /m3u8?magnet=...` answers
 with a master playlist, and each segment behind that playlist is cut out of the
 torrent's MKV and remuxed into fragmented MP4 when a player asks for it. Only
