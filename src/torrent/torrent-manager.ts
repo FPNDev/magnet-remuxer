@@ -13,7 +13,11 @@ import { PeerBans } from './peer-bans.js';
 import { PeerChurn, type PeerChurnOptions } from './peer-churn.js';
 import { PeerMemory } from './peer-memory.js';
 import type { AdoptableTorrent, PieceCache } from './piece-store.js';
-import { asSwarmTorrent, type SwarmWire } from './swarm-internals.js';
+import {
+  asSwarmTorrent,
+  type SwarmTorrent,
+  type SwarmWire,
+} from './swarm-internals.js';
 import { TailHedge, type TailHedgeOptions } from './tail-hedge.js';
 import { UnverifiedPieces } from './unverified-pieces.js';
 import { PUBLIC_TRACKERS } from './public-trackers.js';
@@ -170,12 +174,8 @@ export class TorrentManager {
       ready: torrent.ready,
       peers: torrent.numPeers,
       chokedBy: torrent.wires.filter((wire) => wire.peerChoking).length,
-      interested:
-        (torrent as unknown as { _amInterested?: boolean })._amInterested ??
-        false,
-      wantedRanges:
-        (torrent as unknown as { _selections?: { length: number } })._selections
-          ?.length ?? 0,
+      interested: (torrent as SwarmTorrent)._amInterested ?? false,
+      wantedRanges: (torrent as SwarmTorrent)._selections?.length ?? 0,
       downloadSpeed: Math.round(torrent.downloadSpeed),
       uploadSpeed: Math.round(torrent.uploadSpeed),
       downloaded: torrent.downloaded,
@@ -303,9 +303,7 @@ export class TorrentManager {
       : PUBLIC_TRACKERS;
 
     const torrent = this.client.add(metadata ?? magnet!, {
-      store: pieces.createStore as unknown as NonNullable<
-        TorrentOptions['store']
-      >,
+      store: pieces.createStore as NonNullable<TorrentOptions['store']>,
       path: pieces.directory,
       // Nothing downloads until a read selects pieces.
       deselect: true,

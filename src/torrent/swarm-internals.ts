@@ -83,6 +83,7 @@ export type SwarmTorrent = Torrent & {
   destroyed: boolean;
   bitfield: { get(index: number): boolean };
   pieces: (SwarmPiece | null)[];
+  _amInterested: boolean;
   _selections: { readonly length: number; get(index: number): Selection };
   _peers: Map<string, SwarmPeer>;
   _numQueued: number;
@@ -101,7 +102,7 @@ export type SwarmTorrent = Torrent & {
 };
 
 export const asSwarmTorrent = (torrent: Torrent): SwarmTorrent =>
-  torrent as unknown as SwarmTorrent;
+  torrent as SwarmTorrent;
 
 export const wiresOf = (torrent: SwarmTorrent): SwarmWire[] =>
   torrent.wires as unknown as SwarmWire[];
@@ -156,5 +157,6 @@ export function hasWantedPieces(
       }
     }
   }
+
   return false;
 }

@@ -75,11 +75,13 @@ export class TailHedge {
     if (!this.options.enabled || this.states.has(torrent.infoHash)) {
       return;
     }
+
     const swarm = asSwarmTorrent(torrent);
     const timer = setInterval(() => {
       this.sweep(swarm);
     }, TICK_MS);
     timer.unref();
+
     this.states.set(torrent.infoHash, {
       torrent: swarm,
       timer,
@@ -110,9 +112,10 @@ export class TailHedge {
 
   private sweep(torrent: SwarmTorrent): void {
     const state = this.states.get(torrent.infoHash);
-    if (!state) {
+    if (!state || torrent._selections.length === 0 || torrent._numQueued <= 0) {
       return;
     }
+
     if (torrent.destroyed) {
       this.detach(torrent.infoHash);
       return;
@@ -151,9 +154,11 @@ export class TailHedge {
         }
         continue;
       }
+
       if (state.inFlight >= MAX_IN_FLIGHT) {
         break;
       }
+
       const endgame = this.endgame(state, request.piece);
       if (endgame || this.overdue(watched, request, now)) {
         this.hedge(state, watched, request);
@@ -199,13 +204,16 @@ export class TailHedge {
       { request: BlockRequest; owner: SwarmWire }
     >();
     const heads = headPieces(torrent, HEAD_DEPTH);
+
     if (heads.size === 0) {
       return found;
     }
+
     for (const wire of wiresOf(torrent)) {
       if (wire.destroyed) {
         continue;
       }
+
       for (const request of wire.requests) {
         if (heads.has(request.piece) && request.length <= BLOCK_LENGTH) {
           found.set(blockKey(request.piece, request.offset), {
@@ -215,6 +223,7 @@ export class TailHedge {
         }
       }
     }
+
     return found;
   }
 

@@ -153,7 +153,7 @@ export class PeerChurn {
     const wires = new Set(wiresOf(torrent).filter((wire) => !wire.destroyed));
     for (const wire of state.seen.keys()) {
       if (!wires.has(wire)) {
-        this.remember(state, wire, now);
+        this.remember(torrent, state, wire, now);
         state.seen.delete(wire);
       }
     }
@@ -221,7 +221,12 @@ export class PeerChurn {
   // its address. The key is ip:port, the address a ban is placed on, so the
   // peer a count condemns is the one blocked, and two peers behind one NAT
   // keep separate records.
-  private remember(state: TorrentState, wire: SwarmWire, now: number): void {
+  private remember(
+    torrent: SwarmTorrent,
+    state: TorrentState,
+    wire: SwarmWire,
+    now: number,
+  ): void {
     const address = addressOf(wire);
     if (!address) {
       return;
@@ -237,6 +242,14 @@ export class PeerChurn {
       record.fruitless = 0;
     }
     record.lastSeen = now;
+
+    // We're not asking for anything - lets not ban
+    // for reconnecting while we arent asking for content
+    // Thats just expected behavior for peers
+    if (torrent._selections.length === 0 || torrent._numQueued <= 0) {
+      return;
+    }
+
     const bytes = wire.downloaded + (state.seen.get(wire)?.bytes ?? 0);
     if (bytes > 0) {
       record.served += bytes;
