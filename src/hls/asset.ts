@@ -14,10 +14,13 @@ import { segmentCount, type MediaIndex } from '../media/media-index.js';
 import type { PieceCache } from '../torrent/piece-store.js';
 import type { TorrentManager } from '../torrent/torrent-manager.js';
 import { ReadPriority, TorrentFileSource } from '../torrent/torrent-source.js';
-import { untilAborted } from '../util/async.js';
 import { exists, writeFileAtomic } from '../util/fs.js';
-import { SingleFlight, type FlightResponse } from '../util/single-flight.js';
-import { Priority, type TaskQueue } from '../util/task-queue.js';
+import { SingleFlight } from '../util/single-flight.js';
+import {
+  Priority,
+  type TaskContext,
+  type TaskQueue,
+} from '../util/task-queue.js';
 import {
   masterPlaylist,
   mediaPlaylist,
@@ -53,7 +56,6 @@ export class Asset {
   readonly index: MediaIndex;
   readonly renditions: RenditionSet;
   private readonly flights = new SingleFlight();
-  private readonly stopped = new AbortController();
 
   constructor(private readonly options: AssetOptions) {
     this.index = options.index;
@@ -72,12 +74,7 @@ export class Asset {
     return segmentCount(this.index);
   }
 
-  get dropped(): AbortSignal {
-    return this.stopped.signal;
-  }
-
   drop(reason: Error): void {
-    this.stopped.abort(reason);
     for (const key of this.flights.keys()) {
       this.options.queue.abandon(key, false, reason);
     }
@@ -115,9 +112,9 @@ export class Asset {
 
   writePlaylists(): Promise<void> {
     const { layout, infoHash, fileIndex } = this.options;
+
     return this.flights.run('playlists', undefined, async () => {
       for (const rendition of this.all()) {
-        this.stopped.signal.throwIfAborted();
         const dir = this.dirOf(rendition);
         await mkdir(dir, { recursive: true });
         await writeFileAtomic(
@@ -125,47 +122,53 @@ export class Asset {
           mediaPlaylist(this.index, rendition),
         );
       }
-      this.stopped.signal.throwIfAborted();
+
       await writeFileAtomic(
         layout.masterFile(infoHash, fileIndex),
         masterPlaylist(this.index, this.renditions, `${infoHash}/${fileIndex}`),
       );
-    }).promise;
+    });
   }
 
-  ensureInit(
+  async ensureInit(
     rendition: Rendition,
     file: string,
     priority: Priority,
     signal: AbortSignal | undefined,
   ): Promise<void> {
     if (signal?.aborted) {
-      return Promise.reject(
-        new RequestAbandonedError(`Client is not more waiting for ${file}`),
-      );
+      throw new RequestAbandonedError(`Client is no more waiting for ${file}`);
     }
+
+    if (await exists(file)) {
+      return;
+    }
+
+    await mkdir(path.dirname(file), { recursive: true });
+
     const { queue, remuxer } = this.options;
+
     if (priority === Priority.Foreground) {
       queue.promote(file);
     }
 
-    return this.awaited(file, () =>
-      this.flights.run(file, signal, async () => {
-        if (await exists(file)) {
-          return;
-        }
-        await mkdir(path.dirname(file), { recursive: true });
+    return this.flights.run(
+      file,
+      signal,
+      async () => {
         await queue.run(
           {
             key: file,
             priority,
           },
           ({ signal: running }) => {
-            this.stopped.signal.throwIfAborted();
             return remuxer.writeInit(this.index, rendition, file, running);
           },
         );
-      }),
+      },
+      () => {
+        queue.abandon(file);
+      },
     );
   }
 
@@ -176,90 +179,36 @@ export class Asset {
     signal: AbortSignal | undefined,
     stopIfNotPromoted = false,
   ): Promise<void> {
-    const { queue, segments, torrents, remuxer, pieces } = this.options;
+    const { queue, segments } = this.options;
     const file = this.segmentPath(rendition, n);
-    if (await exists(file)) {
+
+    if (await this.flights.run(`exists:${file}`, signal, () => exists(file))) {
       segments.touch(file);
       return;
     }
+
     if (signal?.aborted) {
       throw new RequestAbandonedError(`Client is not more waiting for ${file}`);
     }
+
     const isForeground = priority === Priority.Foreground;
     if (isForeground) {
       queue.promote(file);
     }
 
     queue.refreshAbandonTimer(file);
+
     const render = () =>
-      this.awaited(file, () =>
-        this.flights.run(file, signal, () =>
-          queue.run(
-            { key: file, priority, stopIfNotPromoted },
-            ({ signal: running, waitedMs, promoted }) =>
-              torrents.use(this.infoHash, async (torrent) => {
-                this.stopped.signal.throwIfAborted();
-                const torrentFile = torrent.files[this.fileIndex];
-                if (!torrentFile) {
-                  throw new HttpError(
-                    404,
-                    `Torrent has no file #${this.fileIndex}`,
-                  );
-                }
-                if (waitedMs > SLOW_QUEUE_WAIT_MS) {
-                  logger.warn('Player waited for a free job slot', {
-                    rendition: renditionPath(rendition),
-                    n,
-                    waitedMs,
-                    jobs: queue.stats,
-                  });
-                }
-
-                const started = Date.now();
-                const source = new TorrentFileSource(
-                  torrent,
-                  torrentFile,
-                  pieces,
-                  {
-                    stallMs: this.options.readStallMs,
-                    subpieceReads: this.options.subpieceReads,
-                    unverified: torrents.unverified,
-                    ...(isForeground ? { priority: ReadPriority.Playing } : {}),
-                  },
-                );
-                void promoted.then(() => {
-                  source.promote();
-                });
-                source.onCorrupt((error) => {
-                  queue.abandon(file, false, error);
-                });
-
-                await mkdir(path.dirname(file), { recursive: true });
-                try {
-                  await remuxer.writeSegment(
-                    { index: this.index, source, rendition, signal: running },
-                    n,
-                    file,
-                  );
-                } catch (err) {
-                  source.release();
-                  throw err;
-                }
-                await segments.added(file);
-                source.onCorrupt(() => {
-                  void rm(file, { force: true }).catch(() => {});
-                });
-                logger.debug('Rendered segment', {
-                  infoHash: this.infoHash,
-                  rendition: renditionPath(rendition),
-                  n,
-                  background: !isForeground,
-                  waitedMs,
-                  ms: Date.now() - started,
-                });
-              }),
+      this.flights.run(
+        file,
+        signal,
+        () =>
+          queue.run({ key: file, priority, stopIfNotPromoted }, (state) =>
+            this.loadRemoteSegment(file, rendition, n, isForeground, state),
           ),
-        ),
+        () => {
+          queue.abandon(file);
+        },
       );
 
     try {
@@ -274,8 +223,82 @@ export class Asset {
           queue.abandon(this.segmentPath(rendition, i), true);
         }
       }
+
       throw err;
     }
+  }
+
+  loadRemoteSegment(
+    file: string,
+    rendition: Rendition,
+    n: number,
+    isForeground: boolean,
+    { signal, waitedMs, promoted }: TaskContext,
+  ) {
+    const { torrents, remuxer, pieces, queue, segments } = this.options;
+
+    return torrents.use(this.infoHash, async (torrent) => {
+      if (signal.aborted) {
+        return;
+      }
+
+      const torrentFile = torrent.files[this.fileIndex];
+      if (!torrentFile) {
+        throw new HttpError(404, `Torrent has no file #${this.fileIndex}`);
+      }
+
+      if (waitedMs > SLOW_QUEUE_WAIT_MS) {
+        logger.warn('Player waited for a free job slot', {
+          rendition: renditionPath(rendition),
+          n,
+          waitedMs,
+          jobs: queue.stats,
+        });
+      }
+
+      const started = Date.now();
+      const source = new TorrentFileSource(torrent, torrentFile, pieces, {
+        stallMs: this.options.readStallMs,
+        subpieceReads: this.options.subpieceReads,
+        unverified: torrents.unverified,
+        ...(isForeground ? { priority: ReadPriority.Playing } : {}),
+      });
+
+      void promoted.then(() => {
+        source.promote();
+      });
+
+      source.onCorrupt((error) => {
+        void rm(file, { force: true }).catch(() => {});
+
+        queue.abandon(`exists:${file}`, false, error);
+        queue.abandon(file, false, error);
+      });
+
+      await mkdir(path.dirname(file), { recursive: true });
+
+      try {
+        await remuxer.writeSegment(
+          { index: this.index, source, rendition, signal },
+          n,
+          file,
+        );
+      } catch (err) {
+        source.release();
+        throw err;
+      }
+
+      await segments.added(file);
+
+      logger.debug('Rendered segment', {
+        infoHash: this.infoHash,
+        rendition: renditionPath(rendition),
+        n,
+        background: !isForeground,
+        waitedMs,
+        ms: Date.now() - started,
+      });
+    });
   }
 
   openingTracks(): Rendition[] {
@@ -305,17 +328,5 @@ export class Asset {
       ...this.renditions.audio,
       ...this.renditions.subtitles,
     ];
-  }
-
-  // Counts the caller as a waiter on key, so the queue can rank the work and
-  // abandon it once the last waiter is gone.
-  private awaited<T>(key: string, work: () => FlightResponse<T>): Promise<T> {
-    return untilAborted(
-      work,
-      () => new RequestAbandonedError(`Nobody is waiting for ${key}`),
-      () => {
-        this.options.queue.abandon(key);
-      },
-    );
   }
 }

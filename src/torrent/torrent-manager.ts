@@ -87,17 +87,17 @@ export class TorrentManager {
     this.sweepTimer.unref();
   }
 
-  remember(infoHash: string, magnet: string): Promise<void> {
+  async remember(infoHash: string, magnet: string): Promise<void> {
+    const file = this.options.layout.magnetFile(infoHash);
+    if (await exists(file)) {
+      return;
+    }
     return this.flights.run(`remember:${infoHash}`, undefined, async () => {
-      const file = this.options.layout.magnetFile(infoHash);
-      if (await exists(file)) {
-        return;
-      }
       await mkdir(this.options.layout.torrentDir(infoHash), {
         recursive: true,
       });
       await writeFileAtomic(file, magnet);
-    }).promise;
+    });
   }
 
   async info(infoHash: string): Promise<TorrentInfo> {
@@ -261,10 +261,12 @@ export class TorrentManager {
         if (existing?.ready && !isDestroyed(existing)) {
           return existing;
         }
-        return await this.flights.run(`add:${infoHash}`, undefined, () =>
-          this.add(infoHash),
-        ).promise;
+
+        return await this.flights.run(`add:${infoHash}`, undefined, () => {
+          return this.add(infoHash);
+        });
       }
+
       throw new HttpError(503, `Torrent ${infoHash} is being removed`);
     } finally {
       const remaining = (this.pending.get(infoHash) ?? 1) - 1;

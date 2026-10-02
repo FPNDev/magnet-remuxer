@@ -1,14 +1,12 @@
+import { RequestAbandonedError } from '../errors.js';
+import { untilAborted } from './async.js';
+
 type PendingFlight = {
   promise: Promise<unknown>;
-  sharedAbortController: AbortController;
+  abortController: AbortController;
   waiters: Set<AbortSignal>;
+  onAborted?: () => void;
 };
-
-export type FlightResponse<T> = {
-  promise: Promise<T>;
-  signal: AbortSignal;
-};
-
 export class SingleFlight {
   private readonly pending = new Map<string, PendingFlight>();
 
@@ -16,7 +14,8 @@ export class SingleFlight {
     key: string,
     signal: AbortSignal | undefined,
     task: () => Promise<T>,
-  ): FlightResponse<T> {
+    onAborted?: PendingFlight['onAborted'],
+  ): Promise<T> {
     let flight = this.pending.get(key);
     if (!flight) {
       const created: PendingFlight = {
@@ -25,8 +24,9 @@ export class SingleFlight {
           .finally(() => {
             this.drop(key, created);
           }),
-        sharedAbortController: new AbortController(),
+        abortController: new AbortController(),
         waiters: new Set(),
+        onAborted,
       };
       this.pending.set(key, created);
       flight = created;
@@ -49,19 +49,18 @@ export class SingleFlight {
       } else {
         waiters.add(signal);
 
-        const remove = () => {
+        const onComplete = () => {
           signal.removeEventListener('abort', leave);
         };
         signal.addEventListener('abort', leave, { once: true });
-
-        flight.promise.then(remove, remove);
+        flight.promise.then(onComplete, onComplete);
       }
     }
 
-    return {
-      promise: flight.promise as Promise<T>,
-      signal: flight.sharedAbortController.signal,
-    };
+    return untilAborted(
+      flight.promise,
+      flight.abortController.signal,
+    ) as Promise<T>;
   }
 
   keys(): MapIterator<string> {
@@ -72,8 +71,12 @@ export class SingleFlight {
     if (this.pending.get(key) !== flight) {
       return;
     }
+
     if (aborted) {
-      flight.sharedAbortController.abort();
+      flight.abortController.abort(
+        new RequestAbandonedError(`No one is waiting for ${key}`),
+      );
+      flight.onAborted?.();
     }
     this.pending.delete(key);
   }

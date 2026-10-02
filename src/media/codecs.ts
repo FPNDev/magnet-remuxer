@@ -81,13 +81,36 @@ export function getRenditions(index: MediaIndex): RenditionSet {
     );
   }
 
+  let audio: AudioRendition[];
+  let subtitles: SubtitleRendition[];
+
+  [audio, subtitles] = filterRenditions(index);
+  if (audio.length === 0 || subtitles.length === 0) {
+    [audio, subtitles] = filterRenditions(index, {
+      audioByLanguage: audio.length > 0,
+      subsByLanguage: subtitles.length > 0,
+    });
+  }
+
+  return {
+    video: { type: 'video', track: video, codec },
+    audio,
+    subtitles,
+  };
+}
+
+function filterRenditions(
+  index: MediaIndex,
+  { audioByLanguage = true, subsByLanguage = true } = {},
+): [AudioRendition[], SubtitleRendition[]] {
   const audio: AudioRendition[] = [];
   const subtitles: SubtitleRendition[] = [];
+
   for (const track of index.tracks) {
     if (
       track.kind === 'audio' &&
-      !UNSUPPORTED_LANGUAGES.has(track.language) &&
-      !UNSUPPORTED_AUDIO.test(track.codecId)
+      !UNSUPPORTED_AUDIO.test(track.codecId) &&
+      !(audioByLanguage && UNSUPPORTED_LANGUAGES.has(track.language))
     ) {
       audio.push({
         type: 'audio',
@@ -96,18 +119,14 @@ export function getRenditions(index: MediaIndex): RenditionSet {
       });
     } else if (
       track.kind === 'subtitle' &&
-      !UNSUPPORTED_LANGUAGES.has(track.language) &&
-      TEXT_SUBTITLES.has(track.codecId)
+      TEXT_SUBTITLES.has(track.codecId) &&
+      !(subsByLanguage && UNSUPPORTED_LANGUAGES.has(track.language))
     ) {
       subtitles.push({ type: 'subtitle', track });
     }
   }
 
-  return {
-    video: { type: 'video', track: video, codec },
-    audio,
-    subtitles,
-  };
+  return [audio, subtitles];
 }
 
 export function aacSampleRate(track: MkvTrack): number {

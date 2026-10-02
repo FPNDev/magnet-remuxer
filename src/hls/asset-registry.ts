@@ -2,7 +2,7 @@ import { mkdir, rm } from 'node:fs/promises';
 
 import type { CacheLayout } from '../cache/cache-layout.js';
 import type { SegmentCache } from '../cache/segment-cache.js';
-import { HttpError, RequestAbandonedError } from '../errors.js';
+import { HttpError } from '../errors.js';
 import { errorMessage, logger } from '../logger.js';
 import {
   buildMediaIndex,
@@ -15,11 +15,10 @@ import type { TorrentManager } from '../torrent/torrent-manager.js';
 import { ReadPriority, TorrentFileSource } from '../torrent/torrent-source.js';
 import { readJson, writeFileAtomic } from '../util/fs.js';
 import { SizeLru } from '../util/lru.js';
-import { SingleFlight, type FlightResponse } from '../util/single-flight.js';
+import { SingleFlight } from '../util/single-flight.js';
 import { Priority, type TaskQueue } from '../util/task-queue.js';
 import { Asset } from './asset.js';
 import type { Remuxer } from './remux.js';
-import { untilAborted } from '../util/async.js';
 
 export const MATROSKA_FILE = /\.(mkv|mk3d|webm)$/iu;
 // An asset rebuilds from its on-disk index cheaply, so the live set is
@@ -66,7 +65,7 @@ export class AssetRegistry {
     return `segment:${infoHash}/${fileIndex}/${parts.join('/')}`;
   }
 
-  get(
+  async get(
     infoHash: string,
     fileIndex: number,
     priority: Priority = Priority.Foreground,
@@ -76,35 +75,34 @@ export class AssetRegistry {
     const cached = this.assets.get(key);
     if (cached) {
       this.order.touch(key);
-      return cached.dropped.aborted
-        ? Promise.reject(cached.dropped.reason)
-        : Promise.resolve(cached);
+
+      return cached;
     }
     const indexKey = AssetRegistry.indexKey(infoHash, fileIndex);
     if (priority === Priority.Foreground) {
       this.options.queue.promote(indexKey);
     }
 
-    return this.awaited(indexKey, () =>
-      this.flights.run(indexKey, signal, async () => {
-        const existing = this.assets.get(key);
-        if (existing) {
-          return existing;
-        }
-        const { index, source } = await this.indexOf(
-          infoHash,
-          fileIndex,
-          priority,
-        );
-        const asset = this.build(infoHash, fileIndex, index);
-        this.remember(key, asset);
-        source?.onCorrupt((error) => {
-          asset.drop(error);
-          void this.forget(infoHash, fileIndex);
-        });
-        return asset;
-      }),
+    const existing = this.assets.get(key);
+    if (existing) {
+      return existing;
+    }
+    const { index, source } = await this.indexOf(
+      infoHash,
+      fileIndex,
+      priority,
+      signal,
     );
+
+    const asset = this.build(infoHash, fileIndex, index);
+    this.remember(key, asset);
+
+    source?.onCorrupt((error) => {
+      asset.drop(error);
+      void this.forget(infoHash, fileIndex);
+    });
+
+    return asset;
   }
 
   // The largest Matroska file is the feature; samples and extras are smaller.
@@ -175,6 +173,7 @@ export class AssetRegistry {
     infoHash: string,
     fileIndex: number,
     priority: Priority,
+    signal?: AbortSignal,
   ): Promise<IndexBuild> {
     const { layout, segmentDuration, segments } = this.options;
     const indexFile = layout.indexFile(infoHash, fileIndex);
@@ -189,17 +188,24 @@ export class AssetRegistry {
       return { index: saved };
     }
 
+    const assetKey = AssetRegistry.indexKey(infoHash, fileIndex);
     const mediaDir = layout.mediaDir(infoHash, fileIndex);
-    await rm(mediaDir, { recursive: true, force: true });
+    await this.flights.run(`remove:${assetKey}`, undefined, async () => {
+      await rm(mediaDir, { recursive: true, force: true });
+    });
     segments.forgetUnder(mediaDir);
 
     const { index, source } = await this.readIndex(
       infoHash,
       fileIndex,
       priority,
+      signal,
     );
-    await mkdir(mediaDir, { recursive: true });
-    await writeFileAtomic(indexFile, JSON.stringify(index));
+
+    await this.flights.run(`save:${assetKey}`, undefined, async () => {
+      await mkdir(mediaDir, { recursive: true });
+      await writeFileAtomic(indexFile, JSON.stringify(index));
+    });
 
     return { index, source };
   }
@@ -208,6 +214,7 @@ export class AssetRegistry {
     infoHash: string,
     fileIndex: number,
     priority: Priority,
+    signal?: AbortSignal,
   ): Promise<IndexBuild> {
     const {
       queue,
@@ -219,58 +226,58 @@ export class AssetRegistry {
       subpieceReads,
     } = this.options;
 
-    return queue.run(
-      {
-        key: AssetRegistry.indexKey(infoHash, fileIndex),
-        priority,
-      },
-      ({ signal }) =>
-        torrents.use(infoHash, async (torrent) => {
-          const file = torrent.files[fileIndex];
-          if (!file) {
-            throw new HttpError(404, `Torrent has no file #${fileIndex}`);
-          }
-          if (!MATROSKA_FILE.test(file.name)) {
-            throw new HttpError(422, `${file.name} is not an MKV or WebM file`);
-          }
+    const key = AssetRegistry.indexKey(infoHash, fileIndex);
 
-          const started = Date.now();
-          const source = new TorrentFileSource(torrent, file, pieces, {
-            stallMs: readStallMs,
-            priority: ReadPriority.Index,
-            critical: criticalIndexReads,
-            subpieceReads,
-            unverified: torrents.unverified,
-            signal,
-          });
-          let index: MediaIndex;
-          try {
-            index = await buildMediaIndex(source, file.name, segmentDuration);
-          } catch (err) {
-            source.release();
-            throw err;
-          }
+    return this.flights.run(
+      key,
+      signal,
+      () =>
+        queue.run({ key, priority }, ({ signal }) =>
+          torrents.use(infoHash, async (torrent) => {
+            const file = torrent.files[fileIndex];
+            if (!file) {
+              throw new HttpError(404, `Torrent has no file #${fileIndex}`);
+            }
+            if (!MATROSKA_FILE.test(file.name)) {
+              throw new HttpError(
+                422,
+                `${file.name} is not an MKV or WebM file`,
+              );
+            }
 
-          logger.info('Indexed media file', {
-            infoHash,
-            file: file.name,
-            duration: Math.round(index.duration),
-            segments: segmentCount(index),
-            tracks: index.tracks.length,
-            ms: Date.now() - started,
-          });
+            const started = Date.now();
+            const source = new TorrentFileSource(torrent, file, pieces, {
+              stallMs: readStallMs,
+              priority: ReadPriority.Index,
+              critical: criticalIndexReads,
+              subpieceReads,
+              unverified: torrents.unverified,
+              signal,
+            });
 
-          return { index, source };
-        }),
-    );
-  }
+            let index: MediaIndex;
 
-  private awaited<T>(key: string, work: () => FlightResponse<T>): Promise<T> {
-    return untilAborted(
-      work,
-      () => new RequestAbandonedError(`Nobody is waiting for ${key}`),
+            try {
+              index = await buildMediaIndex(source, file.name, segmentDuration);
+            } catch (err) {
+              source.release();
+              throw err;
+            }
+
+            logger.info('Indexed media file', {
+              infoHash,
+              file: file.name,
+              duration: Math.round(index.duration),
+              segments: segmentCount(index),
+              tracks: index.tracks.length,
+              ms: Date.now() - started,
+            });
+
+            return { index, source };
+          }),
+        ),
       () => {
-        this.options.queue.abandon(key);
+        queue.abandon(key);
       },
     );
   }

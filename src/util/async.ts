@@ -1,5 +1,3 @@
-import type { FlightResponse } from './single-flight.js';
-
 /**
  * Rejects with onTimeout() after timeoutMs. The promise keeps running, so a
  * caller holding a process or a stream still has to tear it down.
@@ -19,41 +17,26 @@ export function withTimeout<T>(
   });
 }
 
-/**
- * Rejects with onAbort() as soon as signal fires. Like withTimeout, work is
- * left running; abort the thing that produced it as well.
- */
-export function untilAborted<T>(
-  work: () => FlightResponse<T>,
-  onAbort?: () => unknown,
-  onFinally?: () => void,
-): Promise<T> {
-  const { signal, promise } = work();
+/** Resolves with `promise`, or rejects as soon as `signal` aborts. */
+export function untilAborted(promise: Promise<unknown>, signal?: AbortSignal) {
   if (!signal) {
     return promise;
   }
-  if (signal.aborted) {
-    const res = Promise.reject(onAbort?.());
-    onFinally?.();
 
-    return res;
+  if (signal.aborted) {
+    return Promise.reject(signal.reason);
   }
-  return new Promise<T>((resolve, reject) => {
-    let finished = false;
-    const finish = () => {
-      if (!finished) {
-        finished = true;
-        onFinally?.();
-      }
-    };
-    const handleAbort = () => {
-      reject(onAbort?.());
-      finish();
-    };
-    signal.addEventListener('abort', handleAbort, { once: true });
-    promise.then(resolve, reject).finally(() => {
-      signal.removeEventListener('abort', handleAbort);
-      finish();
-    });
-  });
+
+  const { resolve, reject, promise: resultPromise } = Promise.withResolvers();
+  const onAbort = () => {
+    reject(signal.reason);
+  };
+
+  signal.addEventListener('abort', onAbort, { once: true });
+  void promise.then((res) => {
+    signal.removeEventListener('abort', onAbort);
+    resolve(res);
+  }, reject);
+
+  return resultPromise;
 }

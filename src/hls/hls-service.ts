@@ -8,9 +8,9 @@ import { errorMessage, logger } from '../logger.js';
 import { isInfoHash, parseInfoHash } from '../torrent/magnet.js';
 import type { PieceCache } from '../torrent/piece-store.js';
 import type { TorrentManager } from '../torrent/torrent-manager.js';
-import { untilAborted, withTimeout } from '../util/async.js';
+import { withTimeout } from '../util/async.js';
 import { exists } from '../util/fs.js';
-import { SingleFlight, type FlightResponse } from '../util/single-flight.js';
+import { SingleFlight } from '../util/single-flight.js';
 import { Priority, type TaskQueue } from '../util/task-queue.js';
 import type { Asset } from './asset.js';
 import { AssetRegistry, MATROSKA_FILE } from './asset-registry.js';
@@ -134,11 +134,10 @@ export class HlsService {
 
     const key = `info:${infoHash}`;
     const info = await this.orTimeout(
-      this.awaited(key, () =>
-        this.flights.run(key, signal, () => torrents.info(infoHash)),
-      ),
+      this.flights.run(key, signal, () => torrents.info(infoHash)),
       `the file list of ${infoHash}`,
     );
+
     return {
       ...info,
       files: info.files.map((file) => ({
@@ -197,7 +196,6 @@ export class HlsService {
         path: file,
         contentType: PLAYLIST_TYPE,
         cacheControl: PLAYLIST_CACHE,
-        dropped: asset.dropped,
       };
     }
 
@@ -210,7 +208,6 @@ export class HlsService {
         path: file,
         contentType: mediaType,
         cacheControl: MEDIA_CACHE,
-        dropped: asset.dropped,
       };
     }
 
@@ -267,7 +264,6 @@ export class HlsService {
       contentType:
         rendition.type === 'subtitle' ? 'text/vtt; charset=utf-8' : mediaType,
       cacheControl: MEDIA_CACHE,
-      dropped: asset.dropped,
     };
   }
 
@@ -341,18 +337,6 @@ export class HlsService {
       segments: last,
       ms: Date.now() - started,
     });
-  }
-
-  // Counts the request as a waiter on key, so the queue can drop the work
-  // when the client leaves.
-  private awaited<T>(key: string, work: () => FlightResponse<T>): Promise<T> {
-    return untilAborted(
-      work,
-      () => new RequestAbandonedError(`User stopped waiting for ${key}`),
-      () => {
-        this.options.queue.abandon(key);
-      },
-    );
   }
 
   // Bounds how long a client is held. The work behind it keeps running for

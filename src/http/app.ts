@@ -15,10 +15,6 @@ import { MatroskaError } from '../matroska/ebml.js';
 // A torrent's file list is fixed by its info hash, so it caches for a day.
 const FILE_LIST_CACHE = 'public, max-age=86400';
 
-type Locals = {
-  lifetime?: AbortSignal;
-};
-
 export type AppDependencies = {
   hls: HlsService;
   status: () => unknown;
@@ -112,14 +108,13 @@ function magnetFromQuery(req: Request): string {
  * Signal that aborts with RequestAbandonedError once the client drops the
  * response. Reads, queue slots and ffmpeg processes downstream all take it.
  */
-function lifetime(res: Response<unknown, Locals>): AbortSignal {
+function lifetime(res: Response<unknown>): AbortSignal {
   const controller = new AbortController();
   res.once('close', () => {
     if (!res.writableFinished) {
       controller.abort(new RequestAbandonedError('Request ended'));
     }
   });
-  res.locals.lifetime = controller.signal;
   return controller.signal;
 }
 
@@ -135,7 +130,7 @@ function sendFile(res: Response, file: ServedFile): Promise<void> {
       (err) => {
         if (err && !res.headersSent) {
           if ('code' in err && err.code === 'ECONNABORTED') {
-            reject(new RequestAbandonedError('Request aborted'));
+            reject(new RequestAbandonedError());
           } else if (
             'code' in err &&
             err.code === 'ENOENT' &&
@@ -170,12 +165,13 @@ const errorHandler: ErrorRequestHandler<
   Request['params'],
   unknown,
   unknown,
-  Request['query'],
-  Locals
+  Request['query']
 > = (err: unknown, req, res, _next) => {
   // Nobody is left to read a response, and a client leaving is not a fault.
-  if (err instanceof RequestAbandonedError && res.locals.lifetime?.aborted) {
-    logger.debug('Request abandoned', { path: req.path });
+  if (err instanceof RequestAbandonedError) {
+    logger.debug(err.message || 'Request abandoned', {
+      path: req.path,
+    });
     return;
   }
 
@@ -196,8 +192,6 @@ const errorHandler: ErrorRequestHandler<
         ? { stderr: err.stderr.slice(-2000) }
         : {}),
     });
-  } else {
-    logger.warn('Request rejected', { path: req.path, status, error: message });
   }
 
   // The status is already sent, so destroying the socket is the only way to
@@ -206,5 +200,6 @@ const errorHandler: ErrorRequestHandler<
     res.destroy();
     return;
   }
+
   res.status(status).json({ error: message });
 };

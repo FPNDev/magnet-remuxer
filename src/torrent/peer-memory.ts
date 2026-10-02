@@ -93,7 +93,7 @@ export class PeerMemory {
         this.layout.peersFile(torrent.infoHash),
         JSON.stringify(serving),
       ),
-    ).promise;
+    );
 
     return true;
   }
